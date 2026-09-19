@@ -25,6 +25,42 @@
 > 首次启动会问"是否信任这个项目"。拒绝的话 `.pi/settings.json` 不加载、包不会装。
 > 这不是 bug，是 pi 的安全闸 —— 项目级扩展会在你机器上执行代码。
 
+## 源怎么写（在 pi 0.85.1 上直接调解析器实测）
+
+**推荐写法，`git:` 前缀不能省：**
+
+```
+git:github.com/<org>/pi-workflow@v1.0.0
+```
+
+省掉前缀 pi 会当本地目录，报 `Path does not exist: ...\github.com\org\pi-workflow` ——
+这个报错极具误导性，不是文件不存在，是源没被识别成 git。
+
+实测可用：
+
+| 写法 | 结果 |
+| --- | --- |
+| `git:github.com/org/repo@v1.0.0` | ✅ 推荐 |
+| `git:git@github.com:org/repo@v1.0.0` | ✅ SSH |
+| `git:gitee.com/org/repo@v1.0.0` | ✅ 国内直连稳 |
+| `git:gitlab.公司域名.com/team/repo@v1.0.0` | ✅ 自建 GitLab |
+| `git:192.168.1.5:8080/team/repo@v1.0.0` | ✅ 内网 IP 带端口也行 |
+| `https://github.com/org/repo@v1.0.0` | ✅ 协议 URL 可省 `git:` |
+| `git://host/path` | ❌ 不要用，见下 |
+
+**`git://` 是陷阱。** `git://127.0.0.1:9418/repo` 会被 pi 的 `git:` 前缀判断吃掉
+（`git://` 字面上就以 `git:` 开头），剥掉前缀剩 `//127.0.0.1:9418/repo`，解析失败，
+然后**静默降级成本地路径**。官方文档声称支持 `git://`，实测不支持。
+
+锁版本还是跟最新：
+
+| 想要 | 写法 | `pi update --extensions` 行为 |
+| --- | --- | --- |
+| 锁死 | `...@v1.0.0`（tag 或 commit） | 跳过，永远不动，只能手动改 ref |
+| 跟最新 | `git:github.com/org/repo`（不写 ref） | 拉远端默认分支最新 |
+
+带 ref 一律被标记为 pinned。团队分发先用锁死的，出问题好回滚，稳定了再谈自动跟。
+
 ## 发版流程（维护者）
 
 1. 改完 skill / prompt / extension，本地验证
