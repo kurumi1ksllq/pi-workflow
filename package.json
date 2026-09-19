@@ -1,0 +1,9 @@
+{
+  "name": "@your-org/pi-workflow",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Team baseline for pi: shared skills, prompts, extensions",
+  "keywords": [
+    "pi-package"
+  ]
+}
