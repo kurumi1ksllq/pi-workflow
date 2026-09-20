@@ -65,7 +65,7 @@ pi
 团队基线是哪一版？
 ```
 
-答出形如 `pi-workflow v1.3.3` 就是生效了。
+答出形如 `pi-workflow v1.3.5` 就是生效了。
 
 （也可以敲 `/team-baseline` 看自检报告 —— 这个命令只在交互模式有输出。）
 
@@ -86,13 +86,16 @@ pi
 
 ## 之后怎么更新基线
 
-**pi 不会自动更新已装的包，`pi update` 也不会。** 项目负责人升级后：
+**重跑一次 install，带上新版本号就行：**
 
 ```bash
-git pull
-rm -rf .pi/git/github.com/kurumi1ksllq/pi-workflow
-pi
+pi install git:github.com/kurumi1ksllq/pi-workflow@<新版本>
 ```
+
+`pi install` 会把已有的那份切到新版本，不用删任何目录（实测：v1.3.4 → v1.3.5 → v1.3.4 来回切都正常）。
+
+⚠️ **别用 `pi update`** —— 实测它不会把已装的包换版本，也不会对齐你手改过的 ref。
+换版本只有 `pi install` 这一条路。
 
 然后用第 5 步的方式确认版本号变了。
 
@@ -113,7 +116,7 @@ pi
 要把一个新项目接入团队基线，在项目根目录执行一次：
 
 ```bash
-pi install -l git:github.com/kurumi1ksllq/pi-workflow@v1.3.3
+pi install -l git:github.com/kurumi1ksllq/pi-workflow@v1.3.5
 # 把团队包里的 templates/project-AGENTS.md 追加进项目已有的 AGENTS.md
 git add .pi/settings.json AGENTS.md
 git commit -m "chore: 接入团队 pi 基线"

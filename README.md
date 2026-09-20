@@ -83,20 +83,20 @@ git:github.com/<org>/pi-workflow@v1.1.2
 **pi 不会自动更新已装的包，`pi update` 也不会。** 实测三种方式全都没用 ——
 启动 pi、`pi update --extensions`、`pi update --all`，装完就冻结在那一刻。
 
-唯一有效的更新动作：
+唯一有效的更新动作 —— **重跑 install 带新版本号**：
 
 ```bash
-# 项目负责人：改 .pi/settings.json 里的 ref → commit → push
-
+# 项目负责人：改项目里的 ref → commit → push
 # 每个成员：
-git pull
-rm -rf .pi/git/github.com/kurumi1ksllq/pi-workflow
-pi          # 启动时按 settings 里的新 ref 自动重装
+pi install [-l] git:github.com/kurumi1ksllq/pi-workflow@<新版本>
 ```
+
+`pi install` 会把已有的 clone 切到指定版本，**不需要删目录**。
+（`pi update` 不行 —— 它不会换版本，也不会对齐你手改过的 ref。）
 
 所以：
 
-- **ref 一律锁 tag**（`@v1.3.1`）。不写 ref 也一样不会自动更新，
+- **ref 一律锁 tag**（`@v1.3.5`）。不写 ref 也一样不会自动更新，
   只会让你不知道队友此刻跑的是哪一版
 - 别用 `pi update --all` 更新扩展 —— 它会顺带升级 pi 本身
 - **确认自己更新成功**：在 pi 里问「团队基线是哪一版」，或敲 `/team-baseline`。
