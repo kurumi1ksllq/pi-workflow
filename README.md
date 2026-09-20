@@ -8,7 +8,7 @@
 2. 全局装基线：
 
    ```bash
-   pi install git:github.com/kurumi1ksllq/pi-workflow@v1.6.6
+   pi install git:github.com/kurumi1ksllq/pi-workflow@v1.6.7
    ```
 
    **注意没有 `-l`** —— 这是全局安装，落到 `~/.pi/agent/settings.json`，
@@ -26,7 +26,7 @@
 **推荐写法，`git:` 前缀不能省：**
 
 ```
-git:github.com/<org>/pi-workflow@v1.6.6
+git:github.com/<org>/pi-workflow@v1.6.7
 ```
 
 省掉前缀 pi 会当本地目录，报 `Path does not exist: ...\github.com\org\pi-workflow` ——
@@ -70,7 +70,7 @@ git:github.com/<org>/pi-workflow@v1.6.6
 
 - 版本标识以 **git tag** 为准 —— 扩展注入的版本号读的是 `git describe`，不读 `package.json`
   （踩过：tag 里包的 `package.json` version 忘了改，上下文里写的版本和实际装的对不上）
-- 文档里的 `pi-workflow@vX.Y.Z` 由脚本统一改写，所以**别再手工改版本号**，写 `@v1.6.2` 这种具体值就行
+- 文档里的安装命令由脚本统一改写（`pi-workflow@vX.Y.Z` 和 `simulate-member.sh vX.Y.Z`），所以**别再手工改版本号**，照抄当前版本就行
 - 发版后通知成员升级（见下一节），并**先在干净目录验一遍**（见「推完之后怎么验证」）
 
 ## 成员如何更新基线（重要，实测过）
@@ -110,7 +110,7 @@ node scripts/test-extension.mjs
 一行命令，在隔离目录里模拟一个**全新成员**：
 
 ```bash
-bash scripts/simulate-member.sh v1.6.6
+bash scripts/simulate-member.sh v1.6.7
 ```
 
 它做的事：造一个独立的 agent 配置目录（不碰你本机的 `~/.pi/agent`）+
@@ -125,7 +125,7 @@ bash scripts/simulate-member.sh v1.6.6
 
 ```bash
 SB='C:\Users\<你>\pi-check-agent'   # 隔离的 agent 目录，Windows 路径写法
-PI_CODING_AGENT_DIR="$SB" pi install git:github.com/kurumi1ksllq/pi-workflow@v1.6.6
+PI_CODING_AGENT_DIR="$SB" pi install git:github.com/kurumi1ksllq/pi-workflow@v1.6.7
 # 隔离目录不带凭据，启动前把 auth.json / models.json 拷进去
 PI_CODING_AGENT_DIR="$SB" pi -p ok    # 第一次：扩展写清单 + 补 rtk
 PI_CODING_AGENT_DIR="$SB" pi list     # 应看到三项
