@@ -43,11 +43,20 @@ AGENTS.override.md / AGENTS.md / AGENTS.MD / CLAUDE.md / CLAUDE.MD
 
 ## 自己验证注入（不用信别人说的）
 
+两条路，先跑快的：
+
 ```bash
-PI_BASELINE_DEBUG=1 pi
+node scripts/test-extension.mjs   # 离线：直接调扩展的默认导出，验同步逻辑 + 版本标识
 ```
 
-跑完看 `.pi/team-baseline.debug.txt`，里面是**拼接之后的完整系统提示**：
+```bash
+PI_BASELINE_DEBUG=1 pi            # 真机：跑完看 .pi/team-baseline.debug.txt
+```
+
+`test-extension.mjs` 不用启动 pi、不用 provider、不碰本机 `~/.pi/agent`（用临时目录），
+挂了 exit 1 —— 改完扩展先跑它，全链路留给 `scripts/simulate-member.sh`。
+
+`PI_BASELINE_DEBUG=1` 跑完看 `.pi/team-baseline.debug.txt`，里面是**拼接之后的完整系统提示**：
 开头是 pi 的原生提示，往下翻能看到「## 团队基线规范」那一段 —— 那就是注进去的。
 
 ## 团队要一起用的第三方包：team/packages.json

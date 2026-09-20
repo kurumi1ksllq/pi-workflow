@@ -8,7 +8,7 @@
 2. 全局装基线：
 
    ```bash
-   pi install git:github.com/kurumi1ksllq/pi-workflow@v1.6.5
+   pi install git:github.com/kurumi1ksllq/pi-workflow@v1.6.6
    ```
 
    **注意没有 `-l`** —— 这是全局安装，落到 `~/.pi/agent/settings.json`，
@@ -26,7 +26,7 @@
 **推荐写法，`git:` 前缀不能省：**
 
 ```
-git:github.com/<org>/pi-workflow@v1.6.5
+git:github.com/<org>/pi-workflow@v1.6.6
 ```
 
 省掉前缀 pi 会当本地目录，报 `Path does not exist: ...\github.com\org\pi-workflow` ——
@@ -97,10 +97,20 @@ pi install git:github.com/kurumi1ksllq/pi-workflow@<新版本>
 
 ## 推完之后怎么验证
 
-别等成员踩了才发现问题。一行命令，在隔离目录里模拟一个**全新成员**：
+**改完扩展先跑离线测（秒级，不用网络）**：
 
 ```bash
-bash scripts/simulate-member.sh v1.6.2
+node scripts/test-extension.mjs
+```
+
+它离线跑扩展的逻辑，覆盖四条踩过坑的规则：钉版本替换旧的不带版本条目、缺的包追加、
+别人的私有条目和无关设置项不动 + 幂等、版本标识优先用设置里钉的 ref。挂了会 exit 1。
+
+**发版前再跑一次全链路（要网络，约一两分钟）** —— 别等成员踩了才发现问题。
+一行命令，在隔离目录里模拟一个**全新成员**：
+
+```bash
+bash scripts/simulate-member.sh v1.6.6
 ```
 
 它做的事：造一个独立的 agent 配置目录（不碰你本机的 `~/.pi/agent`）+
@@ -115,7 +125,7 @@ bash scripts/simulate-member.sh v1.6.2
 
 ```bash
 SB='C:\Users\<你>\pi-check-agent'   # 隔离的 agent 目录，Windows 路径写法
-PI_CODING_AGENT_DIR="$SB" pi install git:github.com/kurumi1ksllq/pi-workflow@v1.6.5
+PI_CODING_AGENT_DIR="$SB" pi install git:github.com/kurumi1ksllq/pi-workflow@v1.6.6
 # 隔离目录不带凭据，启动前把 auth.json / models.json 拷进去
 PI_CODING_AGENT_DIR="$SB" pi -p ok    # 第一次：扩展写清单 + 补 rtk
 PI_CODING_AGENT_DIR="$SB" pi list     # 应看到三项
@@ -173,7 +183,7 @@ PI_CODING_AGENT_DIR="$SB" pi list     # 应看到三项
 | `team/` | 扩展的数据源：`RULES.md`（规范）+ `mcp.template.json`（MCP 基线）+ `packages.json`（第三方包清单） |
 | `tools/` | `rtk.exe`，`pi-rtk-optimizer` 需要的二进制，随包分发 |
 | `templates/` | 项目级配置模板 `project-settings.json`、项目侧哨兵 `project-AGENTS.md` |
-| `scripts/` | `release.sh`（发版）、`simulate-member.sh`（从零装验证） |
+| `scripts/` | `release.sh`（发版）、`simulate-member.sh`（从零装验证）、`test-extension.mjs`（扩展逻辑离线测） |
 | `docs/` | 怎么写各类资源。**说明文档一律放这里，别放 skills/** |
 | `ONBOARDING.md` | 给成员的上手指南，**可直接转发** |
 | `CHANGELOG.md` | 变更记录 |

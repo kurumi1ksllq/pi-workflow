@@ -1,5 +1,11 @@
 # 变更记录
 
+## v1.6.6
+- 加 `scripts/test-extension.mjs`：离线测扩展逻辑（钉版本替换、追加、不动私有条目 + 幂等、
+  版本标识优先设置里的 ref），不用启动 pi / 不用 provider / 不碰本机 `~/.pi/agent`
+- 发版脚本连 README 里 `simulate-member.sh vX.Y.Z` 的版本号一起改写（之前漏了这处，已经漂了一次）
+- README / docs 补「先跑离线测、再跑全链路」
+
 ## v1.6.5
 - 修**版本标识**：注入段里的版本号改成优先读 pi 设置里钉的 ref（`git:...#@vX.Y.Z`），
   `git describe` 降为备选。原因：pi 升级已存在的 clone 时只 `git fetch origin <ref>`、

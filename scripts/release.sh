@@ -37,7 +37,9 @@ const v = '${V#v}';
 for (const f of ['README.md', 'ONBOARDING.md']) {
   if (!fs.existsSync(f)) continue;
   const before = fs.readFileSync(f, 'utf8');
-  const after = before.replace(/pi-workflow@v[\d.]+/g, 'pi-workflow@v' + v);
+  const after = before
+    .replace(/pi-workflow@v[\d.]+/g, 'pi-workflow@v' + v)
+    .replace(/simulate-member\.sh v[\d.]+/g, 'simulate-member.sh v' + v);
   if (after !== before) {
     fs.writeFileSync(f, after);
     console.log(f + ' -> pi-workflow@v' + v);
