@@ -8,7 +8,7 @@
 2. 在项目根目录执行：
 
    ```bash
-   pi install -l git:github.com/kurumi1ksllq/pi-workflow@v1.0.0
+   pi install -l git:github.com/kurumi1ksllq/pi-workflow@v1.0.1
    ```
 
    `-l` = 写进项目设置 `.pi/settings.json`（不是你的个人全局设置）
@@ -28,7 +28,7 @@
 **推荐写法，`git:` 前缀不能省：**
 
 ```
-git:github.com/<org>/pi-workflow@v1.0.0
+git:github.com/<org>/pi-workflow@v1.0.1
 ```
 
 省掉前缀 pi 会当本地目录，报 `Path does not exist: ...\github.com\org\pi-workflow` ——
@@ -82,7 +82,7 @@ git:github.com/<org>/pi-workflow@v1.0.0
 
 ```bash
 mkdir pi-check && cd pi-check
-pi install -l --approve "git:github.com/kurumi1ksllq/pi-workflow@v1.0.0"
+pi install -l --approve "git:github.com/kurumi1ksllq/pi-workflow@v1.0.1"
 pi list --approve
 ```
 
@@ -93,9 +93,9 @@ pi list --approve
 
 | 路径 | 内容 |
 | --- | --- |
-| `skills/` | 按需加载的能力包，pi 靠 description 判断何时加载 |
+| `skills/` | 按需加载的能力包。`00-core/` 全员共享，其余按角色分目录 |
 | `prompts/` | 斜杠命令，`review.md` → `/review` |
-| `extensions/` | TypeScript 扩展，有完整系统权限，必须 review |
+| `docs/` | 怎么写 skill / prompt / extension。**说明文档一律放这里** |
 
 ## 边界
 
