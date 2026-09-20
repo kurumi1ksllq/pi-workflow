@@ -48,6 +48,33 @@ PI_BASELINE_DEBUG=1 pi
 跑完看 `.pi/team-baseline.debug.txt`，里面是**拼接之后的完整系统提示**：
 开头是 pi 的原生提示，往下翻能看到「## 团队基线规范」那一段 —— 那就是注进去的。
 
+## 团队要一起用的第三方包：team/packages.json
+
+你在自己机器上装了个好用的 pi 包，想让全团队都装上 —— 填进 `team/packages.json` 就行：
+
+```json
+{
+  "packages": [
+    "npm:pi-mcp-adapter",
+    "npm:pi-web-access@0.29.0"
+  ]
+}
+```
+
+扩展会在每次会话启动时，把这些包里**项目还没有的**补进 `.pi/settings.json`，
+并在 stderr 提示一条。做法和其他同步一样：**只补不删、不动已有的、重复调用安全**。
+
+所以流程是：
+
+1. 你把包名填进 `team/packages.json` → 打 tag → 推
+2. 成员升级后跑一次 pi → `.pi/settings.json` 自动补上 → **重启 pi 生效** → 提交那个文件
+
+⚠️ 两点注意：
+
+- 清单是**项目级**的（写进 `.pi/settings.json`），所以别人 clone 项目也能拿到 —— 这是故意的
+- 别在这里放**私人**工具（比如你自己为了省 token 装的那些）。团队清单是"全团队都得用"的东西，
+  放进去等于替所有人做决定
+
 ## 全局装 与 项目装
 
 | 装法 | 命令 | 落在哪 | 谁适合 |

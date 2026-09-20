@@ -122,7 +122,7 @@ pi list --approve
 | `skills/` | 按需加载的能力包。`00-core/` 全员共享，其余按角色分目录 |
 | `prompts/` | 斜杠命令，`review.md` → `/review` |
 | `extensions/` | `team-baseline.ts` —— 引导扩展，把规范注入上下文、把 MCP 基线补进项目 |
-| `team/` | 扩展的数据源：`RULES.md`（团队规范）+ `mcp.template.json` |
+| `team/` | 扩展的数据源：`RULES.md`（规范）+ `mcp.template.json`（MCP 基线）+ `packages.json`（第三方包清单） |
 | `docs/` | 怎么写各类资源。**说明文档一律放这里，别放 skills/** |
 
 ## 扩展做了什么（成员不用管，但该知道）
