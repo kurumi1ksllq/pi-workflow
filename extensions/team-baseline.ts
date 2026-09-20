@@ -193,6 +193,45 @@ function syncPackagesManifest(projectDir: string): PkgSync {
 	return changed ? "added" : "none";
 }
 
+type RtkState = "ok" | "installed" | "not-in-path" | "no-bundle" | "error";
+
+const isWin = process.platform === "win32";
+
+/** 用 where/which 判断 rtk 在不在 PATH 里 —— 跟 pi-rtk-optimizer 自己的判定方式保持一致 */
+function rtkOnPath(): boolean {
+	try {
+		execFileSync(isWin ? "where" : "which", ["rtk"], {
+			stdio: ["ignore", "pipe", "ignore"],
+			timeout: 3000,
+		});
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * rtk 二进制（pi-rtk-optimizer 依赖，但 npm 装不到它）。
+ * 团队成员机器上通常没有，所以包里带一份，缺了就从包里补到 ~/.local/bin。
+ * 这是唯一一个"扩展往用户机器写可执行文件"的地方 —— 写的是团队自己的二进制。
+ */
+function ensureRtk(): RtkState {
+	if (rtkOnPath()) return "ok"; // 已经有了
+	const bundled = path.join(packageRoot, "tools", isWin ? "rtk.exe" : "rtk");
+	if (!fs.existsSync(bundled)) return "no-bundle";
+	const targetDir = path.join(os.homedir(), ".local", "bin");
+	const target = path.join(targetDir, isWin ? "rtk.exe" : "rtk");
+	try {
+		fs.mkdirSync(targetDir, { recursive: true });
+		fs.copyFileSync(bundled, target);
+		if (!isWin) fs.chmodSync(target, 0o755);
+	} catch {
+		return "error";
+	}
+	// 装完再验一次：目录在 PATH 里才算真的可用
+	return rtkOnPath() ? "installed" : "not-in-path";
+}
+
 export default function teamBaseline(pi: ExtensionAPI) {
 	const version = packageVersion();
 	const problems = healthCheck();
@@ -226,6 +265,27 @@ export default function teamBaseline(pi: ExtensionAPI) {
 		pkgResult = "error";
 	}
 
+	// pi-rtk-optimizer 需要的 rtk 二进制：缺了就从包里补一份
+	let rtkResult: RtkState = "ok";
+	try {
+		rtkResult = ensureRtk();
+		if (rtkResult === "installed") {
+			console.error(
+				"[team-baseline] 已把 rtk 装到 ~/.local/bin —— **重启 pi** 后命令压缩就会生效",
+			);
+		} else if (rtkResult === "not-in-path") {
+			console.error(
+				`[team-baseline] rtk 已装到 ~/.local/bin，但该目录**不在 PATH 里** —— 请把它加进 PATH，否则命令压缩不生效`,
+			);
+		} else if (rtkResult === "no-bundle") {
+			console.error(
+				`[team-baseline] 缺 rtk 且包里没有对应平台的二进制（当前 ${process.platform}）—— 请手动安装：https://github.com/rtk-ai/rtk`,
+			);
+		}
+	} catch {
+		rtkResult = "error";
+	}
+
 	pi.on("before_agent_start", async (event) => {
 		const projectDir = process.cwd();
 		const rules = readIfExists(rulesFile);
@@ -256,6 +316,7 @@ ${rules.trim()}
 					`mcpTemplate exists=${fs.existsSync(mcpTemplateFile)}\n` +
 					`mcpSync=${mcpResult}\n` +
 					`pkgSync=${pkgResult}\n` +
+					`rtkSync=${rtkResult}\n` +
 					`problems=${problems.length ? problems.join(" | ") : "(无)"}\n` +
 					`cwd=${projectDir}\n\n`;
 				fs.writeFileSync(path.join(dir, "team-baseline.debug.txt"), diag + injected, "utf-8");
