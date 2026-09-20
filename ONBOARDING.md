@@ -27,10 +27,25 @@ export DEEPSEEK_API_KEY=...
 
 ## 3. clone 项目
 
+**项目负责人会把下面这一行直接发给你** —— 复制粘贴即可，URL 和目录名都已经是实际值，
+一个字符都不用改：
+
 ```bash
-git clone <项目地址>
-cd <项目>
+git clone https://github.com/<org>/<repo>.git && cd <repo> && pi
 ```
+
+（`git clone` 会自动创建跟仓库同名的目录，所以 `cd` 后面是什么是确定的，不用你自己推）
+
+### 私有仓库要先配认证
+
+团队项目如果是私有的，clone 前得让 git 能证明你是你：
+
+```bash
+gh auth login          # 推荐，一次搞定 GitHub 的 HTTPS 认证
+```
+
+不配的话 `git clone` 会卡在认证提示或直接失败 —— 这跟第 2 步的模型凭据一样，
+是**每个成员各自要做**的前置。
 
 ## 4. 启动 pi，同意信任
 
@@ -50,7 +65,7 @@ pi
 团队基线是哪一版？
 ```
 
-答出形如 `pi-workflow v1.3.2` 就是生效了。
+答出形如 `pi-workflow v1.3.3` 就是生效了。
 
 （也可以敲 `/team-baseline` 看自检报告 —— 这个命令只在交互模式有输出。）
 
@@ -98,7 +113,7 @@ pi
 要把一个新项目接入团队基线，在项目根目录执行一次：
 
 ```bash
-pi install -l git:github.com/kurumi1ksllq/pi-workflow@v1.3.2
+pi install -l git:github.com/kurumi1ksllq/pi-workflow@v1.3.3
 # 把团队包里的 templates/project-AGENTS.md 追加进项目已有的 AGENTS.md
 git add .pi/settings.json AGENTS.md
 git commit -m "chore: 接入团队 pi 基线"
