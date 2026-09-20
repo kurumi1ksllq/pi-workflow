@@ -95,7 +95,20 @@ pi list --approve
 | --- | --- |
 | `skills/` | 按需加载的能力包。`00-core/` 全员共享，其余按角色分目录 |
 | `prompts/` | 斜杠命令，`review.md` → `/review` |
-| `docs/` | 怎么写 skill / prompt / extension。**说明文档一律放这里** |
+| `extensions/` | `team-baseline.ts` —— 引导扩展，把规范注入上下文、把 MCP 基线补进项目 |
+| `team/` | 扩展的数据源：`RULES.md`（团队规范）+ `mcp.template.json` |
+| `docs/` | 怎么写各类资源。**说明文档一律放这里，别放 skills/** |
+
+## 扩展做了什么（成员不用管，但该知道）
+
+`team-baseline` 扩展在每次会话做两件事：
+
+1. **把 `team/RULES.md` 注入系统提示** —— pi 原生不加载包内的 AGENTS.md，这是绕过办法
+2. **项目缺 `.mcp.json` 时从包里补一份** —— 绝不覆盖已有的
+
+所以改团队规范 = 改 `team/RULES.md` 然后发新版；改 MCP 基线 = 填 `team/mcp.template.json`。
+
+在 pi 里敲 `/team-baseline` 可以看到当前基线来自哪个版本、哪些生效了。
 
 ## 边界
 
