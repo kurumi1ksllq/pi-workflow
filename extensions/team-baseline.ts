@@ -31,6 +31,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(here, "..");
 const rulesFile = path.join(packageRoot, "team", "RULES.md");
 const mcpTemplateFile = path.join(packageRoot, "team", "mcp.template.json");
+const packagesManifestFile = path.join(packageRoot, "team", "packages.json");
 const pkgJsonFile = path.join(packageRoot, "package.json");
 
 function readIfExists(file: string): string | undefined {
@@ -112,6 +113,51 @@ function syncMcpBaseline(projectDir: string): McpSync {
 	}
 }
 
+type PkgSync = "added" | "none" | "not-a-project" | "error";
+
+/** 去掉末尾的 @ref，用来判断"是不是同一个包" */
+function packageKey(spec: string): string {
+	return spec.trim().replace(/(@[^@/]+)$/, "");
+}
+
+/**
+ * 把团队清单（team/packages.json）里的包补进项目的 .pi/settings.json。
+ * 只补不删、不动已有的，重复调用安全。
+ */
+function syncPackagesManifest(projectDir: string): PkgSync {
+	const projectSettings = path.join(projectDir, ".pi", "settings.json");
+	if (!fs.existsSync(projectSettings)) return "not-a-project";
+
+	const raw = readIfExists(packagesManifestFile);
+	if (!raw) return "none";
+	let wanted: unknown;
+	try {
+		wanted = JSON.parse(raw)?.packages;
+	} catch {
+		return "error";
+	}
+	if (!Array.isArray(wanted) || wanted.length === 0) return "none";
+
+	let settings: any;
+	try {
+		settings = JSON.parse(readIfExists(projectSettings) ?? "{}");
+	} catch {
+		return "error";
+	}
+	const current: string[] = Array.isArray(settings.packages) ? settings.packages : [];
+	const have = new Set(current.map((s) => packageKey(String(s))));
+	const missing = (wanted as string[]).filter((w) => !have.has(packageKey(String(w))));
+	if (missing.length === 0) return "none";
+
+	settings.packages = [...current, ...missing];
+	try {
+		fs.writeFileSync(projectSettings, JSON.stringify(settings, null, 2) + "\n", "utf-8");
+		return "added";
+	} catch {
+		return "error";
+	}
+}
+
 export default function teamBaseline(pi: ExtensionAPI) {
 	const version = packageVersion();
 	const problems = healthCheck();
@@ -132,6 +178,19 @@ export default function teamBaseline(pi: ExtensionAPI) {
 			mcpResult = syncMcpBaseline(projectDir);
 		} catch {
 			mcpResult = "error";
+		}
+
+		// 团队清单里的第三方包：补进项目设置，下次启动生效
+		let pkgResult: PkgSync = "none";
+		try {
+			pkgResult = syncPackagesManifest(projectDir);
+			if (pkgResult === "added") {
+				console.error(
+					`[team-baseline] 已把团队清单里的新包补进 .pi/settings.json —— 重启 pi 后生效，记得提交这个文件`,
+				);
+			}
+		} catch {
+			pkgResult = "error";
 		}
 
 		const rules = readIfExists(rulesFile);
@@ -161,6 +220,7 @@ ${rules.trim()}
 					`rulesFile exists=${fs.existsSync(rulesFile)}\n` +
 					`mcpTemplate exists=${fs.existsSync(mcpTemplateFile)}\n` +
 					`mcpSync=${mcpResult}\n` +
+					`pkgSync=${pkgResult}\n` +
 					`problems=${problems.length ? problems.join(" | ") : "(无)"}\n` +
 					`cwd=${projectDir}\n\n`;
 				fs.writeFileSync(path.join(dir, "team-baseline.debug.txt"), diag + injected, "utf-8");
