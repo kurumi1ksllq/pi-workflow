@@ -1,5 +1,11 @@
 # 变更记录
 
+## v1.3.6
+- 加 `team-baseline-feedback` skill：教 pi 判断基线问题该上报还是本地改，**不自动提 issue**
+- 加 `scripts/release.sh`：发版时自动同步 `package.json` 的 version（根治版本号不一致）
+- `package.json` version 补到与 tag 一致
+
+
 ## v1.3.1
 - 文档补「成员如何更新基线」：实测 pi 不会自动更新已装的包
 
