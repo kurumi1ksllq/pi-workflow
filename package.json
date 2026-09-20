@@ -1,6 +1,6 @@
 {
   "name": "pi-workflow",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "private": true,
   "type": "module",
   "description": "Team baseline for pi: shared skills, prompts, extensions, plus the bootstrap extension that injects team rules into every session",
