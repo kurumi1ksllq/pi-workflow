@@ -1,5 +1,15 @@
 # 变更记录
 
+## v1.6.4
+- **第三方包清单一律钉版本号**（`npm:pi-context-view@0.6.0` / `npm:pi-rtk-optimizer@0.9.0`）
+  —— 不带版本的条目在 pi 眼里不是 pinned，启动会弹「Package Updates Available」，
+  各人升到不同版本就不是同一套了
+- 扩展同步清单时多一条规则：清单里是钉版本的、成员设置里是同一个包但不带版本 → **替换成钉版本那条**
+  （升级路径；别的条目一律不动）。离线 mock 测过：替换 / 追加 / 不动私有条目 / 幂等 四条都通过
+- ONBOARDING 加「看到 Package Updates Available 怎么办」：别跑 `pi update --extensions`，
+  升级基线拿钉版本的清单
+- README / docs/extensions.md 同步说明钉版本的理由
+
 ## v1.6.3
 - 修 `scripts/simulate-member.sh`：原本少了一次启动，`pi list` 只能看到包名、没有安装路径
   （pi 装缺失的包发生在**启动**时，不是 `pi list` 时）。判据改成「三项 packages 都带路径 +

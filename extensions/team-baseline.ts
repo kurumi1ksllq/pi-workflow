@@ -122,12 +122,27 @@ function packageKey(spec: string): string {
 	return spec.trim().replace(/(@[^@/]+)$/, "");
 }
 
+/** 条目带了明确版本（`npm:foo@1.2.3` / `git:...#@v1.2.3`）= 钉死的，要全员一致 */
+function isPinnedSpec(spec: string): boolean {
+	return /@[^@/]+$/.test(spec.trim());
+}
+
 /** pi 的配置目录。团队全员都是全局装，所以清单要落到这里才算数。 */
 function getAgentDir(): string {
 	return process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
 }
 
-/** 把缺的包补进某个 settings 文件。只补不删，返回是否真的改了。 */
+/**
+ * 把缺的包补进某个 settings 文件，**并升级钉死的版本**。返回是否真的改了。
+ *
+ * 规则：只补不删，有一个例外 —— 清单里的条目带了明确版本（`npm:foo@1.2.3`），
+ * 而成员设置里是同一个包但不带版本（`npm:foo`）时，替换成带版本的那条。
+ *
+ * 为什么要替换：不带版本的条目在 pi 眼里**不是 pinned**，启动时会弹
+ * 「Package Updates Available」提示每个成员各自升到最新，团队就不在同一套上了；
+ * 带上版本后，pi 启动时会发现已装版本与配置不符并自动装齐
+ * （实测 package-manager 的 needsInstall 判断里含版本比对）。
+ */
 function addMissingPackages(settingsFile: string, wanted: string[]): boolean {
 	const raw = readIfExists(settingsFile);
 	let settings: any = {};
@@ -139,10 +154,29 @@ function addMissingPackages(settingsFile: string, wanted: string[]): boolean {
 		}
 	}
 	const current: string[] = Array.isArray(settings.packages) ? settings.packages : [];
-	const have = new Set(current.map((s) => packageKey(String(s))));
-	const missing = wanted.filter((w) => !have.has(packageKey(String(w))));
-	if (missing.length === 0) return false;
-	settings.packages = [...current, ...missing];
+	const next: string[] = [...current];
+	let changed = false;
+
+	for (const wantRaw of wanted) {
+		const want = String(wantRaw);
+		const key = packageKey(want);
+		const at = next.findIndex((s) => packageKey(String(s)) === key);
+		if (at === -1) {
+			next.push(want);
+			changed = true;
+			continue;
+		}
+		const existing = String(next[at]);
+		if (existing === want) continue;
+		// 同名条目已存在：只有清单里那条是钉死的版本才替换，否则不动成员自己的写法
+		if (isPinnedSpec(want)) {
+			next[at] = want;
+			changed = true;
+		}
+	}
+
+	if (!changed) return false;
+	settings.packages = next;
 	try {
 		fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
 		fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + "\n", "utf-8");

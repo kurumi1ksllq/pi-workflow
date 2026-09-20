@@ -28,7 +28,7 @@ export DEEPSEEK_API_KEY=...
 ## 3. 装团队基线（**全局**，一次装完所有项目通用）
 
 ```bash
-pi install git:github.com/kurumi1ksllq/pi-workflow@v1.6.3
+pi install git:github.com/kurumi1ksllq/pi-workflow@v1.6.4
 ```
 
 **注意没有 `-l`。** 这是全局安装，装到 `~/.pi/agent/`，
@@ -79,9 +79,9 @@ pi
 - 在 pi 里问「团队基线是哪一版」
 - 敲 `/team-baseline` 看自检报告（只在交互模式有输出）
 - `Ctrl+O` 展开完整启动信息
-- `pi list` 的 **User packages** 里应有三项：`pi-workflow@v1.6.3`、`pi-context-view`、`pi-rtk-optimizer`
+- `pi list` 的 **User packages** 里应有三项：`pi-workflow@v1.6.4`、`pi-context-view`、`pi-rtk-optimizer`
 
-**没生效就按顺序查**：第 2 步的凭据配了吗 → `pi list` 里有 `pi-workflow@v1.6.3` 吗
+**没生效就按顺序查**：第 2 步的凭据配了吗 → `pi list` 里有 `pi-workflow@v1.6.4` 吗
 
 ## 你会自动获得什么
 
@@ -100,7 +100,7 @@ pi
 
 ```bash
 pi remove npm:pi-rtk-optimizer          # 1. 清掉旧版清单遗留的那个扩展（如果它在你设置里）
-pi install git:github.com/kurumi1ksllq/pi-workflow@v1.6.3   # 2. 换版本
+pi install git:github.com/kurumi1ksllq/pi-workflow@v1.6.4   # 2. 换版本
 pi                                       # 3. 启动：扩展补 rtk + 重写清单
 pi                                       # 4. 再启动一次：清单里的包才装上
 ```
@@ -108,6 +108,21 @@ pi                                       # 4. 再启动一次：清单里的包�
 - 不第 1 步会怎样：老版本的 `pi-rtk-optimizer` 在，但机器上没 `rtk`，
   它每次启动都刷 `rtk binary unavailable` 警告。清掉后由 v1.6.x 自动补 rtk，警告消失
 - `pi remove` 不影响团队包本身，只是从你的全局设置里摘掉这一项
+
+## 启动时看到「Package Updates Available」
+
+**别急着按它说的跑 `pi update --extensions`** —— 那条会把你机器上的第三方包升到最新，
+和团队其他人就不一样了。
+
+团队清单里的包都钉了版本，正常情况下这个提示不该出现。出现了说明你手上那份清单是旧的：
+
+```bash
+pi install git:github.com/kurumi1ksllq/pi-workflow@v1.6.4   # 1. 换到钉版本的清单
+pi                                                           # 2. 启动：扩展把不带版本的旧条目换成钉版本
+pi                                                           # 3. 再启动一次：按钉的版本装齐
+```
+
+之后再看到这个提示，说明清单本身漏了版本号 —— 告诉维护者补上。
 
 ## 之后怎么更新基线
 

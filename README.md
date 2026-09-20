@@ -8,7 +8,7 @@
 2. 全局装基线：
 
    ```bash
-   pi install git:github.com/kurumi1ksllq/pi-workflow@v1.6.3
+   pi install git:github.com/kurumi1ksllq/pi-workflow@v1.6.4
    ```
 
    **注意没有 `-l`** —— 这是全局安装，落到 `~/.pi/agent/settings.json`，
@@ -26,7 +26,7 @@
 **推荐写法，`git:` 前缀不能省：**
 
 ```
-git:github.com/<org>/pi-workflow@v1.6.3
+git:github.com/<org>/pi-workflow@v1.6.4
 ```
 
 省掉前缀 pi 会当本地目录，报 `Path does not exist: ...\github.com\org\pi-workflow` ——
@@ -115,7 +115,7 @@ bash scripts/simulate-member.sh v1.6.2
 
 ```bash
 SB='C:\Users\<你>\pi-check-agent'   # 隔离的 agent 目录，Windows 路径写法
-PI_CODING_AGENT_DIR="$SB" pi install git:github.com/kurumi1ksllq/pi-workflow@v1.6.3
+PI_CODING_AGENT_DIR="$SB" pi install git:github.com/kurumi1ksllq/pi-workflow@v1.6.4
 # 隔离目录不带凭据，启动前把 auth.json / models.json 拷进去
 PI_CODING_AGENT_DIR="$SB" pi -p ok    # 第一次：扩展写清单 + 补 rtk
 PI_CODING_AGENT_DIR="$SB" pi list     # 应看到三项
@@ -149,11 +149,16 @@ PI_CODING_AGENT_DIR="$SB" pi list     # 应看到三项
 
 | 要同步什么 | 写哪 | 谁来落地 |
 | --- | --- | --- |
-| **第三方 pi 包**（要团队一起装的扩展） | `team/packages.json` | 扩展自动补进**全局** `~/.pi/agent/settings.json`（只补不删） |
+| **第三方 pi 包**（要团队一起装的扩展） | `team/packages.json`，**一律写死版本号**（`npm:foo@1.2.3`） | 扩展补进**全局** `~/.pi/agent/settings.json`；旧的同名条目（不带版本）会被替换成钉版本的 |
 | **项目级设置**（compaction 等） | 各项目 `.pi/settings.json`，可从 `templates/project-settings.json` 抄 | 项目负责人手工放一次 |
 | 团队自己的 skill / prompt / 扩展 / 规范 | 包内对应目录 | 升级团队包 |
 
 团队是**全员全局装**，所以第三方包清单落到全局设置 —— 不依赖任何项目仓库。
+
+**为什么必须写死版本号**：不带版本的条目在 pi 眼里不是 pinned，启动时会弹
+「Package Updates Available」，各人点一下就升到不同版本，团队就不是同一套了。
+写了版本之后 pi 启动会比对已装版本并自动装齐，提示也不再出现。
+升级第三方包 = 改 `team/packages.json` 里的版本号 → 发版。
 
 **别在两处写包** —— `team/packages.json` 是唯一入口。项目 `.pi/settings.json` 里手写的包不会被它覆盖，
 但重复了容易搞不清谁负责。
