@@ -20,6 +20,7 @@
  * 装法：随团队包分发，成员 `pi install -l <包>` 后自动生效。
  */
 
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,7 +41,24 @@ function readIfExists(file: string): string | undefined {
 	}
 }
 
+/**
+ * 版本标识。优先用 git tag —— tag 才是发布的权威标识。
+ * （踩过：tag v1.2.1 里包着的 package.json version 还是 1.2.0，因为发版时忘了同步。
+ *   读 tag 就没有这个手工同步的环节了。）
+ * 拿不到 tag 就退回 package.json。
+ */
 function packageVersion(): string {
+	try {
+		const tag = execFileSync("git", ["describe", "--tags", "--always"], {
+			cwd: packageRoot,
+			encoding: "utf-8",
+			timeout: 3000,
+			stdio: ["ignore", "pipe", "ignore"],
+		}).trim();
+		if (tag) return tag;
+	} catch {
+		// 不是 git 目录 / 没装 git —— 退回 package.json
+	}
 	try {
 		return JSON.parse(readIfExists(pkgJsonFile) ?? "{}").version ?? "unknown";
 	} catch {
