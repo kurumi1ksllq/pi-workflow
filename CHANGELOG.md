@@ -1,5 +1,47 @@
 # 变更记录
 
+## v1.6.2
+- README 重写过期流程：改成**全员全局装**（不带 `-l`）、第三方包清单落全局设置、发版走脚本
+- `scripts/release.sh` 顺手对齐 README / ONBOARDING 里的版本号，这两份文档不用再手工改版本
+- 加 `scripts/simulate-member.sh`：在隔离目录里模拟新成员从零装，一条命令验完三条链路
+- ONBOARDING 补「v1.5.x → v1.6.x 升级顺序」（先 `pi remove npm:pi-rtk-optimizer` 再升级）
+- CHANGELOG 补齐 v1.3.7 起的空缺（v1.3.7 ~ v1.6.1）
+
+## v1.6.1
+- rtk 优先补到 **npm 全局 bin 目录** —— Windows 上 `~/.local/bin` 默认不在 PATH，补了也找不到（实测）
+- rtk 相关提示文案不再写死路径
+
+## v1.6.0
+- 扩展自动补 rtk 二进制（`pi-rtk-optimizer` 的依赖），清单加回该扩展
+
+## v1.5.2
+- 清单暂时去掉 `pi-rtk-optimizer` —— 它需要独立的 rtk 二进制，成员装上会一直刷警告
+
+## v1.5.1
+- 第一次装基线时明确提示「再启动一次 pi」，说明为什么（pi 的包安装发生在扩展加载之前）
+
+## v1.5.0
+- **行为变更**：团队全员**全局装**，清单从项目 `.pi/settings.json` 改到全局 `~/.pi/agent/settings.json`
+- ONBOARDING 改全局流程
+
+## v1.4.4
+- onboarding 补「提交自动补上的包」步骤（v1.5.0 起不再需要）
+
+## v1.4.3
+- 团队包清单加入 `pi-context-view` / `pi-rtk-optimizer`
+
+## v1.4.2
+- 整合包清单机制：包统一走 `team/packages.json`，项目模板只留设置项
+
+## v1.4.1
+- 文档说明团队第三方包清单机制
+
+## v1.4.0
+- 团队包清单自动同步到各项目
+
+## v1.3.7
+- onboarding 改用启动资源列表验收
+
 ## v1.3.6
 - 加 `team-baseline-feedback` skill：教 pi 判断基线问题该上报还是本地改，**不自动提 issue**
 - 加 `scripts/release.sh`：发版时自动同步 `package.json` 的 version（根治版本号不一致）

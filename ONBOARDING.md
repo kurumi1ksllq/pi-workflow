@@ -28,7 +28,7 @@ export DEEPSEEK_API_KEY=...
 ## 3. 装团队基线（**全局**，一次装完所有项目通用）
 
 ```bash
-pi install git:github.com/kurumi1ksllq/pi-workflow@v1.5.0
+pi install git:github.com/kurumi1ksllq/pi-workflow@v1.6.2
 ```
 
 **注意没有 `-l`。** 这是全局安装，装到 `~/.pi/agent/`，
@@ -50,6 +50,12 @@ pi
 （pi 的包安装发生在扩展加载之前，所以天生差这一步 —— 只在第一次装的时候需要）。
 
 以后再往清单里加包，也是同样的两下：启动、看到提示、再启动一次。
+
+同一批提示里还会有这句，不用管它，是自动装了 `rtk`：
+
+```
+[team-baseline] 已把 rtk 装好（PATH 里能找到）—— **重启 pi** 后命令压缩就会生效
+```
 
 ## 4. 确认生效
 
@@ -73,8 +79,9 @@ pi
 - 在 pi 里问「团队基线是哪一版」
 - 敲 `/team-baseline` 看自检报告（只在交互模式有输出）
 - `Ctrl+O` 展开完整启动信息
+- `pi list` 的 **User packages** 里应有三项：`pi-workflow@v1.6.2`、`pi-context-view`、`pi-rtk-optimizer`
 
-**没生效就按顺序查**：第 2 步的凭据配了吗 → `pi list` 里有 `pi-workflow@v1.5.0` 吗
+**没生效就按顺序查**：第 2 步的凭据配了吗 → `pi list` 里有 `pi-workflow@v1.6.2` 吗
 
 ## 你会自动获得什么
 
@@ -84,7 +91,23 @@ pi
 | 4 个 skill | pi 自己判断该用时加载 |
 | `/review` | 敲它审查当前 diff |
 | 团队统一装的扩展 | 启动时自动补进你的全局设置，重启后生效 |
+| rtk 命令压缩 | 同上，扩展顺手把缺的 `rtk` 二进制补到 PATH 里的目录 |
 | MCP 基线 | 在已接入基线的项目里自动补 `.mcp.json` |
+
+## 从 v1.5.x 升到 v1.6.x
+
+顺序别反：
+
+```bash
+pi remove npm:pi-rtk-optimizer          # 1. 清掉旧版清单遗留的那个扩展（如果它在你设置里）
+pi install git:github.com/kurumi1ksllq/pi-workflow@v1.6.2   # 2. 换版本
+pi                                       # 3. 启动：扩展补 rtk + 重写清单
+pi                                       # 4. 再启动一次：清单里的包才装上
+```
+
+- 不第 1 步会怎样：老版本的 `pi-rtk-optimizer` 在，但机器上没 `rtk`，
+  它每次启动都刷 `rtk binary unavailable` 警告。清掉后由 v1.6.x 自动补 rtk，警告消失
+- `pi remove` 不影响团队包本身，只是从你的全局设置里摘掉这一项
 
 ## 之后怎么更新基线
 

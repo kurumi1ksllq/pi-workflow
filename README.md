@@ -1,34 +1,32 @@
 # pi-workflow
 
-团队 pi 基线。装一次，所有人拿到同一套 skills、prompts、extensions。
+团队 pi 基线。全局装一次，所有人拿到同一套 skills、prompts、extensions、团队规范。
 
-## 成员怎么用（三步）
+## 成员怎么用（两步）
 
 1. 装 pi（已装跳过）
-2. 在项目根目录执行：
+2. 全局装基线：
 
    ```bash
-   pi install -l git:github.com/kurumi1ksllq/pi-workflow@v1.1.2
+   pi install git:github.com/kurumi1ksllq/pi-workflow@v1.6.2
    ```
 
-   `-l` = 写进项目设置 `.pi/settings.json`（不是你的个人全局设置）
+   **注意没有 `-l`** —— 这是全局安装，落到 `~/.pi/agent/settings.json`，
+   之后你在任何目录跑 pi 都带着团队基线，**不绑定任何具体项目**。
 
-3. 把 `.pi/settings.json` 提交进项目仓库
+3. 第一次装完**再启动一次 pi**。终端会提示「请退出再启动一次 pi」，照做：
 
-   克隆下来的包 pi 自己会挡：它往 `.pi/git/` 里放了一个 `.gitignore`（内容 `*` 加 `!.gitignore`），
-   安装产物不会被误提交。想双保险就在项目 `.gitignore` 里再补一条 `.pi/git/`。
+   引导扩展会把团队清单里的第三方包写进你的全局设置，而 pi 的包安装发生在扩展加载**之前**，
+   所以清单里的包要第二次启动才装上。只在第一次装基线、以及以后往清单里加包时需要。
 
-之后新成员 clone 项目 → 启动 pi → 弹出信任提示点同意 → **缺失的包自动装齐**，不用手动跑任何命令。
-
-> 首次启动会问"是否信任这个项目"。拒绝的话 `.pi/settings.json` 不加载、包不会装。
-> 这不是 bug，是 pi 的安全闸 —— 项目级扩展会在你机器上执行代码。
+给成员的完整版（含凭据配置、验收方式）在 [`ONBOARDING.md`](ONBOARDING.md)，**可直接转发**。
 
 ## 源怎么写（在 pi 0.85.1 上直接调解析器实测）
 
 **推荐写法，`git:` 前缀不能省：**
 
 ```
-git:github.com/<org>/pi-workflow@v1.1.2
+git:github.com/<org>/pi-workflow@v1.6.2
 ```
 
 省掉前缀 pi 会当本地目录，报 `Path does not exist: ...\github.com\org\pi-workflow` ——
@@ -61,22 +59,19 @@ git:github.com/<org>/pi-workflow@v1.1.2
 
 ## 发版流程（维护者）
 
-1. 改完 skill / prompt / extension，本地验证
-2. **把 `package.json` 的 `version` 改成这次的版本号**（扩展读它，会显示在注入段里；
-   忘了改就会出现"装的是 v1.2.0、上下文里写 v1.1.0"这种自相矛盾）
-3. 提交并打 tag，两者版本号必须一致：
+一条命令：
 
-   ```bash
-   git add -A && git commit -m "add xxx skill"
-   git tag v1.1.0
-   git push && git push --tags
-   ```
+```bash
+./scripts/release.sh v1.6.2 "docs: 修 README 过期流程（全员全局装）"
+```
 
-4. 更新各项目的 `.pi/settings.json` 里的 ref，以及本文件「成员怎么用」里的版本号
-5. 通知成员升级
+脚本做四件事：① 把 `package.json` 的 version **和 README/ONBOARDING 里的版本号**一起对齐 →
+② 提交 → ③ 打 tag → ④ 推 main 和 tag。
 
-带 ref 的写法是**钉死的** —— `pi update` 不会偷偷把成员的版本挪走，
-只会在成员 pull 到新 ref 后把本地 clone 对齐过去。想回滚就改回旧 tag。
+- 版本标识以 **git tag** 为准 —— 扩展注入的版本号读的是 `git describe`，不读 `package.json`
+  （踩过：tag 里包的 `package.json` version 忘了改，上下文里写的版本和实际装的对不上）
+- 文档里的 `pi-workflow@vX.Y.Z` 由脚本统一改写，所以**别再手工改版本号**，写 `@v1.6.2` 这种具体值就行
+- 发版后通知成员升级（见下一节），并**先在干净目录验一遍**（见「推完之后怎么验证」）
 
 ## 成员如何更新基线（重要，实测过）
 
@@ -86,9 +81,7 @@ git:github.com/<org>/pi-workflow@v1.1.2
 唯一有效的更新动作 —— **重跑 install 带新版本号**：
 
 ```bash
-# 项目负责人：改项目里的 ref → commit → push
-# 每个成员：
-pi install [-l] git:github.com/kurumi1ksllq/pi-workflow@<新版本>
+pi install git:github.com/kurumi1ksllq/pi-workflow@<新版本>
 ```
 
 `pi install` 会把已有的 clone 切到指定版本，**不需要删目录**。
@@ -96,7 +89,7 @@ pi install [-l] git:github.com/kurumi1ksllq/pi-workflow@<新版本>
 
 所以：
 
-- **ref 一律锁 tag**（`@v1.3.5`）。不写 ref 也一样不会自动更新，
+- **ref 一律锁 tag**（`@vX.Y.Z`）。不写 ref 也一样不会自动更新，
   只会让你不知道队友此刻跑的是哪一版
 - 别用 `pi update --all` 更新扩展 —— 它会顺带升级 pi 本身
 - **确认自己更新成功**：在 pi 里问「团队基线是哪一版」，或敲 `/team-baseline`。
@@ -104,16 +97,28 @@ pi install [-l] git:github.com/kurumi1ksllq/pi-workflow@<新版本>
 
 ## 推完之后怎么验证
 
-别等成员踩了才发现问题。在一个空目录里模拟成员从零装一次：
+别等成员踩了才发现问题。一行命令，在隔离目录里模拟一个**全新成员**：
 
 ```bash
-mkdir pi-check && cd pi-check
-pi install -l --approve "git:github.com/kurumi1ksllq/pi-workflow@v1.1.2"
-pi list --approve
+bash scripts/simulate-member.sh v1.6.2
 ```
 
-`pi list` 的 Project packages 里能看到这个包，就说明远程源、ref、包结构三样都对。
-验证完删掉 `pi-check` 即可。
+它做的事：造一个独立的 agent 配置目录（不碰你本机的 `~/.pi/agent`）+
+从 PATH 里摘掉 rtk（模拟没装过 rtk 的机器），然后跑两次启动，最后打印
+`pi list` 的包列表和 rtk 的落点。**判据**：三次启动后 `User packages` 里三项齐全
+（`pi-workflow`、`pi-context-view`、`pi-rtk-optimizer`），且 rtk 落在 PATH 能找到的目录里。
+
+手工等价流程：
+
+```bash
+SB='C:\Users\<你>\pi-check-agent'   # 隔离的 agent 目录，Windows 路径写法
+PI_CODING_AGENT_DIR="$SB" pi install git:github.com/kurumi1ksllq/pi-workflow@v1.6.2
+# 隔离目录不带凭据，启动前把 auth.json / models.json 拷进去
+PI_CODING_AGENT_DIR="$SB" pi -p ok    # 第一次：扩展写清单 + 补 rtk
+PI_CODING_AGENT_DIR="$SB" pi list     # 应看到三项
+```
+
+`pi list` 里能看到这些包，就说明远程源、ref、包结构、扩展三条链路都对。验证完删掉那个目录即可。
 
 ## 加第三方包之前先确认一件事
 
@@ -141,11 +146,14 @@ pi list --approve
 
 | 要同步什么 | 写哪 | 谁来落地 |
 | --- | --- | --- |
-| **第三方 pi 包**（要团队一起装的扩展） | `team/packages.json` | 扩展自动补进各项目的 `.pi/settings.json`（只补不删） |
+| **第三方 pi 包**（要团队一起装的扩展） | `team/packages.json` | 扩展自动补进**全局** `~/.pi/agent/settings.json`（只补不删） |
 | **项目级设置**（compaction 等） | 各项目 `.pi/settings.json`，可从 `templates/project-settings.json` 抄 | 项目负责人手工放一次 |
 | 团队自己的 skill / prompt / 扩展 / 规范 | 包内对应目录 | 升级团队包 |
 
-**别在两处写包** —— `team/packages.json` 是唯一入口，项目里手写的包不会被它覆盖，但重复了容易搞不清谁负责。
+团队是**全员全局装**，所以第三方包清单落到全局设置 —— 不依赖任何项目仓库。
+
+**别在两处写包** —— `team/packages.json` 是唯一入口。项目 `.pi/settings.json` 里手写的包不会被它覆盖，
+但重复了容易搞不清谁负责。
 
 ## 目录
 
@@ -153,16 +161,23 @@ pi list --approve
 | --- | --- |
 | `skills/` | 按需加载的能力包。`00-core/` 全员共享，其余按角色分目录 |
 | `prompts/` | 斜杠命令，`review.md` → `/review` |
-| `extensions/` | `team-baseline.ts` —— 引导扩展，把规范注入上下文、把 MCP 基线补进项目 |
+| `extensions/` | `team-baseline.ts` —— 引导扩展：注入规范、补 MCP 基线、同步包清单、补 rtk |
 | `team/` | 扩展的数据源：`RULES.md`（规范）+ `mcp.template.json`（MCP 基线）+ `packages.json`（第三方包清单） |
+| `tools/` | `rtk.exe`，`pi-rtk-optimizer` 需要的二进制，随包分发 |
+| `templates/` | 项目级配置模板 `project-settings.json`、项目侧哨兵 `project-AGENTS.md` |
+| `scripts/` | `release.sh`（发版）、`simulate-member.sh`（从零装验证） |
 | `docs/` | 怎么写各类资源。**说明文档一律放这里，别放 skills/** |
+| `ONBOARDING.md` | 给成员的上手指南，**可直接转发** |
+| `CHANGELOG.md` | 变更记录 |
 
 ## 扩展做了什么（成员不用管，但该知道）
 
-`team-baseline` 扩展在每次会话做两件事：
+`team-baseline` 扩展在每次会话做四件事：
 
 1. **把 `team/RULES.md` 注入系统提示** —— pi 原生不加载包内的 AGENTS.md，这是绕过办法
-2. **项目缺 `.mcp.json` 时从包里补一份** —— 绝不覆盖已有的
+2. **项目缺 `.mcp.json` 时从包里补一份** —— 绝不覆盖已有的；只在有 `.pi/` 的目录里动手
+3. **把 `team/packages.json` 里的包补进全局设置** —— 只补不删、幂等；补了会提示重启
+4. **缺 rtk 时从 `tools/` 补一份到 npm 全局 bin** —— 补完用 `where` 验一次
 
 所以改团队规范 = 改 `team/RULES.md` 然后发新版；改 MCP 基线 = 填 `team/mcp.template.json`。
 
@@ -172,4 +187,4 @@ pi list --approve
 
 - 这里只放**团队共识**。个人试验装在自己全局（`~/.pi/agent/settings.json`）或用 `pi -e` 临时跑，验证过再迁进来
 - 项目专属的约定不写这，写各项目仓库根的 `AGENTS.md` —— pi 启动时自动拼接加载
-- 谁都不该在 `.pi/settings.json` 里手写源，统一用 `pi install -l`，避免路径和 ref 写法不一致
+- 别手工编辑 `~/.pi/agent/settings.json` 里的包源，统一用 `pi install`（不带 `-l`），避免路径和 ref 写法不一致
