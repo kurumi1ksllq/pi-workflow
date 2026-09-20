@@ -78,6 +78,30 @@ git:github.com/<org>/pi-workflow@v1.1.2
 带 ref 的写法是**钉死的** —— `pi update` 不会偷偷把成员的版本挪走，
 只会在成员 pull 到新 ref 后把本地 clone 对齐过去。想回滚就改回旧 tag。
 
+## 成员如何更新基线（重要，实测过）
+
+**pi 不会自动更新已装的包，`pi update` 也不会。** 实测三种方式全都没用 ——
+启动 pi、`pi update --extensions`、`pi update --all`，装完就冻结在那一刻。
+
+唯一有效的更新动作：
+
+```bash
+# 项目负责人：改 .pi/settings.json 里的 ref → commit → push
+
+# 每个成员：
+git pull
+rm -rf .pi/git/github.com/kurumi1ksllq/pi-workflow
+pi          # 启动时按 settings 里的新 ref 自动重装
+```
+
+所以：
+
+- **ref 一律锁 tag**（`@v1.3.1`）。不写 ref 也一样不会自动更新，
+  只会让你不知道队友此刻跑的是哪一版
+- 别用 `pi update --all` 更新扩展 —— 它会顺带升级 pi 本身
+- **确认自己更新成功**：在 pi 里问「团队基线是哪一版」，或敲 `/team-baseline`。
+  注入段里带版本号（读的是 git tag，不会和实际版本对不上）
+
 ## 推完之后怎么验证
 
 别等成员踩了才发现问题。在一个空目录里模拟成员从零装一次：
