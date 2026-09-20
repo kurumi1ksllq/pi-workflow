@@ -59,15 +59,29 @@ pi
 
 ## 5. 确认基线生效
 
-**在 pi 里直接问它**：
+**看 `pi` 启动时打印的资源列表** —— 最直接，一眼就够：
 
 ```
-团队基线是哪一版？
+[Skills]
+  api-review, commit-convention, team-baseline-feedback, ui-review
+
+[Prompts]
+  /review
+
+[Extensions]
+  kurumi1ksllq/pi-workflow:team-baseline.ts
 ```
 
-答出形如 `pi-workflow v1.3.5` 就是生效了。
+**看到这三段就是生效了。**
 
-（也可以敲 `/team-baseline` 看自检报告 —— 这个命令只在交互模式有输出。）
+注意这几段**只在有内容时才显示** —— 缺 `[Skills]` 或 `[Prompts]` 段，说明基线没装上去。
+（你以前如果装过私人包，`[Extensions]` 里会多出它们，那是你自己的，不影响。）
+
+其他确认方式：
+
+- 在 pi 里问「团队基线是哪一版」→ 答出 `v1.3.7` 之类
+- 敲 `/team-baseline` 看自检报告（只在交互模式有输出）
+- `Ctrl+O` 展开完整启动信息
 
 **没生效就按顺序查**：
 
@@ -80,7 +94,7 @@ pi
 | 内容 | 怎么用 |
 | --- | --- |
 | 团队规范 | 已在上下文里，不用管 |
-| 3 个 skill（提交规范 / 接口审查 / 界面审查） | pi 自己判断该用时加载 |
+| 4 个 skill（提交规范 / 接口审查 / 界面审查 / 基线反馈） | pi 自己判断该用时加载 |
 | `/review` | 敲它审查当前 diff |
 | MCP 基线 | 项目缺 `.mcp.json` 时自动补上 |
 
