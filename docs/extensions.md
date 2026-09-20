@@ -48,6 +48,17 @@ PI_BASELINE_DEBUG=1 pi
 跑完看 `.pi/team-baseline.debug.txt`，里面是**拼接之后的完整系统提示**：
 开头是 pi 的原生提示，往下翻能看到「## 团队基线规范」那一段 —— 那就是注进去的。
 
+## 各事件什么时候触发（踩过的坑）
+
+| 事件 | 交互模式 | print 模式（`-p` / `--mode json` / rpc） |
+| --- | --- | --- |
+| `before_agent_start` | ✅ | ✅ |
+| `session_start` | ✅ | ❌ **不触发** |
+
+所以**核心逻辑必须挂在 `before_agent_start`**。MCP 同步一开始挂在 `session_start`，
+结果 print 模式下静默不生效 —— 这个坑踩过一次，别改回去。
+`session_start` 只用来做交互模式下的额外提示。
+
 ## 什么时候会静默失效
 
 | 情况 | 现象 |
