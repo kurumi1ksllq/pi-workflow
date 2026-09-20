@@ -1,5 +1,12 @@
 # 变更记录
 
+## v1.6.5
+- 修**版本标识**：注入段里的版本号改成优先读 pi 设置里钉的 ref（`git:...#@vX.Y.Z`），
+  `git describe` 降为备选。原因：pi 升级已存在的 clone 时只 `git fetch origin <ref>`、
+  **不建本地 tag**（实测 `installGit`），升级过基线的成员 clone 里的 tag 是旧的，
+  describe 会给出 `v1.4.4-8-g8c8c540` 这种误导值 ——「不知道队友跑的是哪一版」的老问题换个形式回来了
+- 离线 mock 加场景验证：设置里写 `@v9.9.9` 时注入段必须显示 v9.9.9（仓库 tag 仍是 v1.6.4）
+
 ## v1.6.4
 - **第三方包清单一律钉版本号**（`npm:pi-context-view@0.6.0` / `npm:pi-rtk-optimizer@0.9.0`）
   —— 不带版本的条目在 pi 眼里不是 pinned，启动会弹「Package Updates Available」，

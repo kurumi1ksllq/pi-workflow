@@ -49,8 +49,41 @@ function readIfExists(file: string): string | undefined {
  * （踩过：tag v1.2.1 里包着的 package.json version 还是 1.2.0，因为发版时忘了同步。
  *   读 tag 就没有这个手工同步的环节了。）
  * 拿不到 tag 就退回 package.json。
+ *
+ * ⚠️ clone 里的 tag 可能是旧的：pi 升级已存在的 clone 时只跑 `git fetch origin <ref>`
+ * （实测 dist/core/package-manager.js 的 installGit），**不会建本地 tag**。
+ * 于是 describe 会给出 `v1.4.4-8-g8c8c540` 这种误导值。所以优先读 pi 设置里配的那个 ref
+ * —— 那才是"这次装的是哪一版"的权威答案。
  */
+function configuredRef(): string | undefined {
+	const candidates = [
+		path.join(getAgentDir(), "settings.json"),
+		path.join(process.cwd(), ".pi", "settings.json"),
+	];
+	for (const file of candidates) {
+		const raw = readIfExists(file);
+		if (!raw) continue;
+		try {
+			const pkgs = JSON.parse(raw)?.packages;
+			if (!Array.isArray(pkgs)) continue;
+			for (const entry of pkgs) {
+				const spec = String(entry);
+				if (!spec.includes("pi-workflow")) continue;
+				const m = spec.match(/@(v\d+\.\d+\.\d+[^@]*)$/);
+				if (m) return m[1];
+			}
+		} catch {
+			// 设置读坏了就当没有，继续试下一个
+		}
+	}
+	return undefined;
+}
+
 function packageVersion(): string {
+	// 1) pi 设置里配的 ref —— 权威，且不受 clone 内 tag 陈旧影响
+	const fromSettings = configuredRef();
+	if (fromSettings) return fromSettings;
+	// 2) clone 里的 tag（干净的 vX.Y.Z 才采用）
 	try {
 		const tag = execFileSync("git", ["describe", "--tags", "--always"], {
 			cwd: packageRoot,
@@ -62,6 +95,7 @@ function packageVersion(): string {
 	} catch {
 		// 不是 git 目录 / 没装 git —— 退回 package.json
 	}
+	// 3) 最后兜底
 	try {
 		return JSON.parse(readIfExists(pkgJsonFile) ?? "{}").version ?? "unknown";
 	} catch {

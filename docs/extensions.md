@@ -130,6 +130,11 @@ PI_BASELINE_DEBUG=1 pi
 | 2. 注入段带版本号 | 不知道自己跑的是哪版 | 注入文本里有 `（来源：pi-workflow vX.Y.Z）`，问模型就能问出来 |
 | 3. 项目侧哨兵 | **扩展完全没加载**（项目未信任等） | 各项目仓库根放 `templates/project-AGENTS.md` —— pi 原生加载它，扩展挂了它会提醒模型主动报告 |
 
+第 2 层的版本号**优先读 pi 设置里钉的那个 ref**（`git:...#@v1.6.5`），不是 `git describe`。
+原因：pi 升级一个已存在的 clone 时只跑 `git fetch origin <ref>`，**不会在 clone 里建本地 tag**
+（实测 `dist/core/package-manager.js` 的 `installGit`）。于是升级过基线的成员，clone 里的 tag 停在旧版本，
+`git describe` 会给出 `v1.4.4-8-g8c8c540` 这种误导值。设置里那个 ref 才是权威答案。
+
 第 3 层是关键：**用必然加载的东西，去检测可能没加载的东西**。
 
 主动确认基线在正常工作：
