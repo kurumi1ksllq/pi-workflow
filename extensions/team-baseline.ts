@@ -205,29 +205,29 @@ export default function teamBaseline(pi: ExtensionAPI) {
 		);
 	}
 
+	// ★ 这两个同步要在 pi 检查"缺哪些包"之前做完，所以放在扩展加载时（而不是 agent 启动时）。
+	//   放在 before_agent_start 里会晚一步，导致成员必须启动两次才拿到清单里的扩展（实测踩过）。
+	const bootProjectDir = process.cwd();
+	let mcpResult: McpSync = "error";
+	try {
+		mcpResult = syncMcpBaseline(bootProjectDir);
+	} catch {
+		mcpResult = "error";
+	}
+	let pkgResult: PkgSync = "none";
+	try {
+		pkgResult = syncPackagesManifest(bootProjectDir);
+		if (pkgResult === "added") {
+			console.error(
+				"[team-baseline] 已把团队清单里的扩展写进配置 —— **请退出再启动一次 pi**，它们会被装上（pi 的包安装发生在扩展加载之前，所以差了这一步）",
+			);
+		}
+	} catch {
+		pkgResult = "error";
+	}
+
 	pi.on("before_agent_start", async (event) => {
 		const projectDir = process.cwd();
-
-		let mcpResult: McpSync = "error";
-		try {
-			mcpResult = syncMcpBaseline(projectDir);
-		} catch {
-			mcpResult = "error";
-		}
-
-		// 团队清单里的第三方包：补进项目设置，下次启动生效
-		let pkgResult: PkgSync = "none";
-		try {
-			pkgResult = syncPackagesManifest(projectDir);
-			if (pkgResult === "added") {
-				console.error(
-					`[team-baseline] 已按团队清单补上缺失的包 —— 重启 pi 后生效`,
-				);
-			}
-		} catch {
-			pkgResult = "error";
-		}
-
 		const rules = readIfExists(rulesFile);
 		if (!rules?.trim()) return;
 
