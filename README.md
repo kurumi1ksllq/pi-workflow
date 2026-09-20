@@ -5,20 +5,18 @@
 ## 成员怎么用（三步）
 
 1. 装 pi（已装跳过）
-2. 在项目根目录执行，把 `<org>` 换成实际组织名：
+2. 在项目根目录执行：
 
    ```bash
-   pi install -l git:github.com/<org>/pi-workflow@v1.0.0
+   pi install -l git:github.com/kurumi1ksllq/pi-workflow@v1.0.0
    ```
 
    `-l` = 写进项目设置 `.pi/settings.json`（不是你的个人全局设置）
 
-3. 提交 `.pi/settings.json`，并在项目 `.gitignore` 里加上：
+3. 把 `.pi/settings.json` 提交进项目仓库
 
-   ```
-   .pi/git/
-   .pi/npm/
-   ```
+   克隆下来的包 pi 自己会挡：它往 `.pi/git/` 里放了一个 `.gitignore`（内容 `*` 加 `!.gitignore`），
+   安装产物不会被误提交。想双保险就在项目 `.gitignore` 里再补一条 `.pi/git/`。
 
 之后新成员 clone 项目 → 启动 pi → 弹出信任提示点同意 → **缺失的包自动装齐**，不用手动跑任何命令。
 
@@ -77,6 +75,19 @@ git:github.com/<org>/pi-workflow@v1.0.0
 
 `@v1.1.0` 这种带 ref 的写法是**钉死的** —— `pi update` 不会偷偷把成员的版本挪走，
 只会在成员 pull 到新 ref 后把本地 clone 对齐过去。想回滚就改回旧 tag。
+
+## 推完之后怎么验证
+
+别等成员踩了才发现问题。在一个空目录里模拟成员从零装一次：
+
+```bash
+mkdir pi-check && cd pi-check
+pi install -l --approve "git:github.com/kurumi1ksllq/pi-workflow@v1.0.0"
+pi list --approve
+```
+
+`pi list` 的 Project packages 里能看到这个包，就说明远程源、ref、包结构三样都对。
+验证完删掉 `pi-check` 即可。
 
 ## 目录
 
