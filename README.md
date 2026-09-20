@@ -62,7 +62,9 @@ git:github.com/<org>/pi-workflow@v1.1.2
 ## 发版流程（维护者）
 
 1. 改完 skill / prompt / extension，本地验证
-2. 打 tag 并发出去：
+2. **把 `package.json` 的 `version` 改成这次的版本号**（扩展读它，会显示在注入段里；
+   忘了改就会出现"装的是 v1.2.0、上下文里写 v1.1.0"这种自相矛盾）
+3. 提交并打 tag，两者版本号必须一致：
 
    ```bash
    git add -A && git commit -m "add xxx skill"
@@ -70,8 +72,8 @@ git:github.com/<org>/pi-workflow@v1.1.2
    git push && git push --tags
    ```
 
-3. 更新各项目的 `.pi/settings.json` 里的 ref，以及本文件「成员怎么用」里的版本号
-4. 通知成员 pull
+4. 更新各项目的 `.pi/settings.json` 里的 ref，以及本文件「成员怎么用」里的版本号
+5. 通知成员升级
 
 带 ref 的写法是**钉死的** —— `pi update` 不会偷偷把成员的版本挪走，
 只会在成员 pull 到新 ref 后把本地 clone 对齐过去。想回滚就改回旧 tag。

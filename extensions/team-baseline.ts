@@ -7,9 +7,15 @@
  *   2. MCP 配置没有"从包里读"的入口（pi-mcp-adapter 只认固定几个位置）
  *      -> 项目缺 .mcp.json 时从包里补一份（只补不覆盖）
  *
- * ⚠️ 逻辑必须挂在 before_agent_start，不能挂 session_start：
- *    实测 session_start 在 print 模式（-p / --mode json / rpc）下不触发，
- *    挂那里会导致 MCP 基线静默同步失败（这个坑踩过一次）。
+ * 设计原则：**不静默失效**
+ *   - 自检发现问题 -> 写 stderr（print / json / rpc 模式都能看到，不像 ui.notify 只在交互模式）
+ *   - 注入段里带版本号，随时能问出"跑的是哪一版"
+ *   - `/team-baseline` 命令能跑出来本身就是"扩展在工作"的证据
+ *   - 兜底：各项目仓库根放 templates/project-AGENTS.md（pi 原生加载），
+ *     扩展彻底没跑时，那段文字会让模型主动报告
+ *
+ * ⚠️ 核心逻辑必须挂 before_agent_start，不能挂 session_start：
+ *    实测 session_start 在 print 模式（-p / --mode json / rpc）下不触发。
  *
  * 装法：随团队包分发，成员 `pi install -l <包>` 后自动生效。
  */
@@ -24,6 +30,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(here, "..");
 const rulesFile = path.join(packageRoot, "team", "RULES.md");
 const mcpTemplateFile = path.join(packageRoot, "team", "mcp.template.json");
+const pkgJsonFile = path.join(packageRoot, "package.json");
 
 function readIfExists(file: string): string | undefined {
 	try {
@@ -33,57 +40,107 @@ function readIfExists(file: string): string | undefined {
 	}
 }
 
-/** 项目缺 .mcp.json 时从包里补一份。只补不覆盖，可重复调用。 */
-export function syncMcpBaseline(projectDir: string): boolean {
-	const projectMcp = path.join(projectDir, ".mcp.json");
-	if (fs.existsSync(projectMcp)) return false;
-	const template = readIfExists(mcpTemplateFile);
-	if (!template) return false;
+function packageVersion(): string {
 	try {
-		const parsed = JSON.parse(template);
-		if (!parsed?.mcpServers || Object.keys(parsed.mcpServers).length === 0) return false;
-		fs.writeFileSync(projectMcp, template, "utf-8");
-		return true;
+		return JSON.parse(readIfExists(pkgJsonFile) ?? "{}").version ?? "unknown";
 	} catch {
-		// 模板不合法就什么都不做
-		return false;
+		return "unknown";
+	}
+}
+
+/** 自检。返回问题列表，空数组 = 一切正常。 */
+function healthCheck(): string[] {
+	const problems: string[] = [];
+	if (!fs.existsSync(rulesFile)) {
+		problems.push("team/RULES.md 不存在 -> 团队规范不会被注入");
+	} else if (!readIfExists(rulesFile)?.trim()) {
+		problems.push("team/RULES.md 是空文件");
+	}
+	const tpl = readIfExists(mcpTemplateFile);
+	if (!tpl) {
+		problems.push("team/mcp.template.json 不存在 -> MCP 基线不会同步");
+	} else {
+		try {
+			JSON.parse(tpl);
+		} catch {
+			problems.push("team/mcp.template.json 不是合法 JSON -> MCP 同步被跳过");
+		}
+	}
+	return problems;
+}
+
+type McpSync = "written" | "exists" | "empty" | "invalid" | "error";
+
+function syncMcpBaseline(projectDir: string): McpSync {
+	const projectMcp = path.join(projectDir, ".mcp.json");
+	if (fs.existsSync(projectMcp)) return "exists";
+	const template = readIfExists(mcpTemplateFile);
+	if (!template) return "invalid";
+	let parsed: any;
+	try {
+		parsed = JSON.parse(template);
+	} catch {
+		return "invalid";
+	}
+	if (!parsed?.mcpServers || Object.keys(parsed.mcpServers).length === 0) return "empty";
+	try {
+		fs.writeFileSync(projectMcp, template, "utf-8");
+		return "written";
+	} catch {
+		return "error";
 	}
 }
 
 export default function teamBaseline(pi: ExtensionAPI) {
-	// 核心：每次 agent 启动都跑（print 模式和交互模式都会触发）
+	const version = packageVersion();
+	const problems = healthCheck();
+
+	// 自检失败立刻报警。stderr 在任何模式下都可见。
+	if (problems.length > 0) {
+		console.error(
+			`[team-baseline] 自检未通过（pi-workflow ${version}）:\n` +
+				problems.map((p) => `  ✗ ${p}`).join("\n"),
+		);
+	}
+
 	pi.on("before_agent_start", async (event) => {
 		const projectDir = process.cwd();
 
+		let mcpResult: McpSync = "error";
 		try {
-			syncMcpBaseline(projectDir);
+			mcpResult = syncMcpBaseline(projectDir);
 		} catch {
-			// 同步失败不影响会话
+			mcpResult = "error";
 		}
 
 		const rules = readIfExists(rulesFile);
 		if (!rules?.trim()) return;
 
+		const status = problems.length > 0 ? "；⚠ 自检发现问题，详见 stderr" : "";
 		const injected =
 			event.systemPrompt +
 			`
 
 ## 团队基线规范
 
-以下规范来自团队 pi 基线包，优先级高于你的默认习惯：
+（来源：pi-workflow ${version}，由 team-baseline 扩展注入${status}）
+
+以下规范优先级高于你的默认习惯：
 
 ${rules.trim()}
 `;
 
-		// 自证开关：PI_BASELINE_DEBUG=1 时把完整上下文落到项目里，便于审计
 		if (process.env.PI_BASELINE_DEBUG) {
 			try {
 				const dir = path.join(projectDir, ".pi");
 				fs.mkdirSync(dir, { recursive: true });
 				const diag =
 					`packageRoot=${packageRoot}\n` +
-					`rulesFile=${rulesFile} exists=${fs.existsSync(rulesFile)}\n` +
-					`mcpTemplateFile=${mcpTemplateFile} exists=${fs.existsSync(mcpTemplateFile)}\n` +
+					`version=${version}\n` +
+					`rulesFile exists=${fs.existsSync(rulesFile)}\n` +
+					`mcpTemplate exists=${fs.existsSync(mcpTemplateFile)}\n` +
+					`mcpSync=${mcpResult}\n` +
+					`problems=${problems.length ? problems.join(" | ") : "(无)"}\n` +
 					`cwd=${projectDir}\n\n`;
 				fs.writeFileSync(path.join(dir, "team-baseline.debug.txt"), diag + injected, "utf-8");
 			} catch {
@@ -94,23 +151,28 @@ ${rules.trim()}
 		return { systemPrompt: injected };
 	});
 
-	// 交互模式下的可见性：规范读不到就提示（print 模式下这个事件不触发，无害）
+	// 交互模式下的可见提示（print 模式这个事件不触发，但上面的 stderr 已经覆盖了）
 	pi.on("session_start", async (_event, ctx) => {
-		if (!fs.existsSync(rulesFile)) {
-			ctx.ui.notify("团队基线：读不到 team/RULES.md，团队规范没有被注入", "info");
+		if (problems.length > 0) {
+			ctx.ui.notify(`团队基线自检未通过：${problems.join("；")}`, "info");
 		}
 	});
 
 	pi.registerCommand("team-baseline", {
-		description: "查看团队基线的来源与同步状态",
+		description: "查看团队基线的来源、版本与同步状态",
 		handler: async (_args, ctx) => {
-			const ok = (p: string) => (fs.existsSync(p) ? "✓" : "✗");
+			const ok = (b: boolean) => (b ? "✓" : "✗");
+			const projectMcp = path.join(ctx.cwd, ".mcp.json");
 			ctx.ui.notify(
 				[
-					`团队包：${packageRoot}`,
-					`规范文件 team/RULES.md：${ok(rulesFile)}`,
-					`MCP 模板 team/mcp.template.json：${ok(mcpTemplateFile)}`,
-					`本项目 .mcp.json：${ok(path.join(ctx.cwd, ".mcp.json"))}`,
+					`pi-workflow ${version}`,
+					`包位置：${packageRoot}`,
+					`团队规范：${ok(fs.existsSync(rulesFile))}`,
+					`MCP 模板：${ok(fs.existsSync(mcpTemplateFile))}`,
+					`本项目 .mcp.json：${fs.existsSync(projectMcp) ? "存在" : "不存在"}`,
+					`自检：${problems.length === 0 ? "✓ 全部通过" : "✗ " + problems.join("；")}`,
+					"",
+					"（这条命令能跑出来，本身就说明 team-baseline 扩展在工作）",
 				].join("\n"),
 				"info",
 			);
