@@ -1,5 +1,11 @@
 # 变更记录
 
+## v1.6.3
+- 修 `scripts/simulate-member.sh`：原本少了一次启动，`pi list` 只能看到包名、没有安装路径
+  （pi 装缺失的包发生在**启动**时，不是 `pi list` 时）。判据改成「三项 packages 都带路径 +
+  隔离目录 `npm/node_modules` 里确实有那两个包」
+- README 的验证判据同步改准
+
 ## v1.6.2
 - README 重写过期流程：改成**全员全局装**（不带 `-l`）、第三方包清单落全局设置、发版走脚本
 - `scripts/release.sh` 顺手对齐 README / ONBOARDING 里的版本号，这两份文档不用再手工改版本

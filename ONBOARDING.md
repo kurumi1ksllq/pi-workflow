@@ -28,7 +28,7 @@ export DEEPSEEK_API_KEY=...
 ## 3. 装团队基线（**全局**，一次装完所有项目通用）
 
 ```bash
-pi install git:github.com/kurumi1ksllq/pi-workflow@v1.6.2
+pi install git:github.com/kurumi1ksllq/pi-workflow@v1.6.3
 ```
 
 **注意没有 `-l`。** 这是全局安装，装到 `~/.pi/agent/`，
@@ -79,9 +79,9 @@ pi
 - 在 pi 里问「团队基线是哪一版」
 - 敲 `/team-baseline` 看自检报告（只在交互模式有输出）
 - `Ctrl+O` 展开完整启动信息
-- `pi list` 的 **User packages** 里应有三项：`pi-workflow@v1.6.2`、`pi-context-view`、`pi-rtk-optimizer`
+- `pi list` 的 **User packages** 里应有三项：`pi-workflow@v1.6.3`、`pi-context-view`、`pi-rtk-optimizer`
 
-**没生效就按顺序查**：第 2 步的凭据配了吗 → `pi list` 里有 `pi-workflow@v1.6.2` 吗
+**没生效就按顺序查**：第 2 步的凭据配了吗 → `pi list` 里有 `pi-workflow@v1.6.3` 吗
 
 ## 你会自动获得什么
 
@@ -100,7 +100,7 @@ pi
 
 ```bash
 pi remove npm:pi-rtk-optimizer          # 1. 清掉旧版清单遗留的那个扩展（如果它在你设置里）
-pi install git:github.com/kurumi1ksllq/pi-workflow@v1.6.2   # 2. 换版本
+pi install git:github.com/kurumi1ksllq/pi-workflow@v1.6.3   # 2. 换版本
 pi                                       # 3. 启动：扩展补 rtk + 重写清单
 pi                                       # 4. 再启动一次：清单里的包才装上
 ```

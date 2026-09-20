@@ -8,7 +8,7 @@
 2. 全局装基线：
 
    ```bash
-   pi install git:github.com/kurumi1ksllq/pi-workflow@v1.6.2
+   pi install git:github.com/kurumi1ksllq/pi-workflow@v1.6.3
    ```
 
    **注意没有 `-l`** —— 这是全局安装，落到 `~/.pi/agent/settings.json`，
@@ -26,7 +26,7 @@
 **推荐写法，`git:` 前缀不能省：**
 
 ```
-git:github.com/<org>/pi-workflow@v1.6.2
+git:github.com/<org>/pi-workflow@v1.6.3
 ```
 
 省掉前缀 pi 会当本地目录，报 `Path does not exist: ...\github.com\org\pi-workflow` ——
@@ -104,15 +104,18 @@ bash scripts/simulate-member.sh v1.6.2
 ```
 
 它做的事：造一个独立的 agent 配置目录（不碰你本机的 `~/.pi/agent`）+
-从 PATH 里摘掉 rtk（模拟没装过 rtk 的机器），然后跑两次启动，最后打印
-`pi list` 的包列表和 rtk 的落点。**判据**：三次启动后 `User packages` 里三项齐全
-（`pi-workflow`、`pi-context-view`、`pi-rtk-optimizer`），且 rtk 落在 PATH 能找到的目录里。
+从 PATH 里摘掉 rtk（模拟没装过 rtk 的机器），然后走 `install` → 第一次启动 → 第二次启动 →
+`pi list`，把包装到哪、rtk 落在哪都打出来。
+
+**判据**：`User packages` 三项都**带安装路径**（`pi-workflow`、`pi-context-view`、`pi-rtk-optimizer`）、
+隔离目录的 `npm/node_modules` 里有那两个包、rtk 能被 `command -v` 找到。
+只看到包名没有路径 = 还在设置里没装上 —— 少了第二次启动。
 
 手工等价流程：
 
 ```bash
 SB='C:\Users\<你>\pi-check-agent'   # 隔离的 agent 目录，Windows 路径写法
-PI_CODING_AGENT_DIR="$SB" pi install git:github.com/kurumi1ksllq/pi-workflow@v1.6.2
+PI_CODING_AGENT_DIR="$SB" pi install git:github.com/kurumi1ksllq/pi-workflow@v1.6.3
 # 隔离目录不带凭据，启动前把 auth.json / models.json 拷进去
 PI_CODING_AGENT_DIR="$SB" pi -p ok    # 第一次：扩展写清单 + 补 rtk
 PI_CODING_AGENT_DIR="$SB" pi list     # 应看到三项
