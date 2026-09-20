@@ -87,11 +87,14 @@ function healthCheck(): string[] {
 	return problems;
 }
 
-type McpSync = "written" | "exists" | "empty" | "invalid" | "error";
+type McpSync = "written" | "exists" | "empty" | "invalid" | "error" | "not-a-project";
 
 function syncMcpBaseline(projectDir: string): McpSync {
 	const projectMcp = path.join(projectDir, ".mcp.json");
 	if (fs.existsSync(projectMcp)) return "exists";
+	// 只在已接入基线的目录里动手（有 .pi/ 才是 pi 项目工作区）。
+	// 基线装成全局之后，不加这道闸的话，任何跑过 pi 的目录都会被塞一个 .mcp.json。
+	if (!fs.existsSync(path.join(projectDir, ".pi"))) return "not-a-project";
 	const template = readIfExists(mcpTemplateFile);
 	if (!template) return "invalid";
 	let parsed: any;
