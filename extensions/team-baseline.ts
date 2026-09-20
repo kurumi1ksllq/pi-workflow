@@ -217,19 +217,33 @@ function rtkOnPath(): boolean {
  */
 function ensureRtk(): RtkState {
 	if (rtkOnPath()) return "ok"; // 已经有了
-	const bundled = path.join(packageRoot, "tools", isWin ? "rtk.exe" : "rtk");
+	const binName = isWin ? "rtk.exe" : "rtk";
+	const bundled = path.join(packageRoot, "tools", binName);
 	if (!fs.existsSync(bundled)) return "no-bundle";
-	const targetDir = path.join(os.homedir(), ".local", "bin");
-	const target = path.join(targetDir, isWin ? "rtk.exe" : "rtk");
-	try {
-		fs.mkdirSync(targetDir, { recursive: true });
-		fs.copyFileSync(bundled, target);
-		if (!isWin) fs.chmodSync(target, 0o755);
-	} catch {
-		return "error";
+
+	// 候选目录按"有多大概率已经在 PATH 里"排序，逐个试，写进去就用 where/which 验一次。
+	// 放 ~/.local/bin 是不够的：Windows 上那个目录默认不在 PATH，装了也找不到（实测过）。
+	const candidates = isWin
+		? [
+				// npm 全局 bin —— 用 npm 装过 pi 的人，这个目录必然在 PATH
+				path.join(os.homedir(), "AppData", "Roaming", "npm"),
+				path.join(os.homedir(), ".local", "bin"),
+			]
+		: [path.join(os.homedir(), ".local", "bin")];
+
+	for (const dir of candidates) {
+		try {
+			fs.mkdirSync(dir, { recursive: true });
+			const target = path.join(dir, binName);
+			fs.copyFileSync(bundled, target);
+			if (!isWin) fs.chmodSync(target, 0o755);
+			// 装完立刻验证：这一处能被 where/which 认到才算成功
+			if (rtkOnPath()) return "installed";
+		} catch {
+			// 换下一个候选目录
+		}
 	}
-	// 装完再验一次：目录在 PATH 里才算真的可用
-	return rtkOnPath() ? "installed" : "not-in-path";
+	return "not-in-path";
 }
 
 export default function teamBaseline(pi: ExtensionAPI) {
@@ -271,11 +285,11 @@ export default function teamBaseline(pi: ExtensionAPI) {
 		rtkResult = ensureRtk();
 		if (rtkResult === "installed") {
 			console.error(
-				"[team-baseline] 已把 rtk 装到 ~/.local/bin —— **重启 pi** 后命令压缩就会生效",
+				"[team-baseline] 已把 rtk 装好（PATH 里能找到）—— **重启 pi** 后命令压缩就会生效",
 			);
 		} else if (rtkResult === "not-in-path") {
 			console.error(
-				`[team-baseline] rtk 已装到 ~/.local/bin，但该目录**不在 PATH 里** —— 请把它加进 PATH，否则命令压缩不生效`,
+				`[team-baseline] rtk 已装好，但所在目录**不在 PATH 里** —— 请把 ${path.join(os.homedir(), ".local", "bin")} 加进 PATH，否则命令压缩不生效`,
 			);
 		} else if (rtkResult === "no-bundle") {
 			console.error(

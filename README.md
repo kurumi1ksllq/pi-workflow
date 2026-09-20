@@ -120,10 +120,15 @@ pi list --approve
 **这个包有没有外部依赖？** `pi install` 只能装 npm 包本身，
 装不了它需要的独立二进制/系统工具。
 
-踩过的例子：`pi-rtk-optimizer` 需要单独的 `rtk` 二进制
-（Windows 上只能从 GitHub Releases 下 zip），加进清单后，
-成员装上扩展却没有二进制，pi 每次启动都打一行
-「rtk binary unavailable」的警告 —— 看着像故障，其实只是降级。
+踩过的例子：`pi-rtk-optimizer` 需要单独的 `rtk` 二进制，而 **rtk 不在 pi 的包体系里**
+（官方 `@rtk-ai/rtk` 没发 npm 包；而且实测 `pi install npm:xxx` 装的包，
+它的命令行**不会**进 PATH，所以就算有 npm 包也没用）。
+
+**这个坑的解法**：包里带一份 `tools/rtk.exe`，扩展启动时检测 `where rtk`，
+缺了就复制到 **npm 全局 bin 目录**（用 npm 装过 pi 的人，该目录必然在 PATH），
+复制完再用 `where` 验一次。全自动，成员无感。
+
+**新增带外部依赖的包时照这个模式办**：把二进制放 `tools/`，扩展里加一段补装逻辑。
 
 **所以加包前先看一眼它的 README**，确认：
 
