@@ -1,7 +1,4 @@
 {
-  "packages": [
-    "git:github.com/kurumi1ksllq/pi-workflow@v1.3.8"
-  ],
   "compaction": {
     "enabled": true,
     "reserveTokens": 32768,

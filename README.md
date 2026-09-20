@@ -115,6 +115,16 @@ pi list --approve
 `pi list` 的 Project packages 里能看到这个包，就说明远程源、ref、包结构三样都对。
 验证完删掉 `pi-check` 即可。
 
+## 两个清单，分工别搞混
+
+| 要同步什么 | 写哪 | 谁来落地 |
+| --- | --- | --- |
+| **第三方 pi 包**（要团队一起装的扩展） | `team/packages.json` | 扩展自动补进各项目的 `.pi/settings.json`（只补不删） |
+| **项目级设置**（compaction 等） | 各项目 `.pi/settings.json`，可从 `templates/project-settings.json` 抄 | 项目负责人手工放一次 |
+| 团队自己的 skill / prompt / 扩展 / 规范 | 包内对应目录 | 升级团队包 |
+
+**别在两处写包** —— `team/packages.json` 是唯一入口，项目里手写的包不会被它覆盖，但重复了容易搞不清谁负责。
+
 ## 目录
 
 | 路径 | 内容 |
