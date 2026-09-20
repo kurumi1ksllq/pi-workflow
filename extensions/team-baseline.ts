@@ -17,11 +17,13 @@
  * ⚠️ 核心逻辑必须挂 before_agent_start，不能挂 session_start：
  *    实测 session_start 在 print 模式（-p / --mode json / rpc）下不触发。
  *
- * 装法：随团队包分发，成员 `pi install -l <包>` 后自动生效。
+ * 装法：随团队包分发。团队全员**全局装**（`pi install <包>`，不带 -l），
+ *       清单里的第三方包由本扩展补进全局 settings，与具体项目无关。
  */
 
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -113,21 +115,53 @@ function syncMcpBaseline(projectDir: string): McpSync {
 	}
 }
 
-type PkgSync = "added" | "none" | "not-a-project" | "error";
+type PkgSync = "added" | "none" | "error";
 
 /** 去掉末尾的 @ref，用来判断"是不是同一个包" */
 function packageKey(spec: string): string {
 	return spec.trim().replace(/(@[^@/]+)$/, "");
 }
 
+/** pi 的配置目录。团队全员都是全局装，所以清单要落到这里才算数。 */
+function getAgentDir(): string {
+	return process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
+}
+
+/** 把缺的包补进某个 settings 文件。只补不删，返回是否真的改了。 */
+function addMissingPackages(settingsFile: string, wanted: string[]): boolean {
+	const raw = readIfExists(settingsFile);
+	let settings: any = {};
+	if (raw) {
+		try {
+			settings = JSON.parse(raw);
+		} catch {
+			return false;
+		}
+	}
+	const current: string[] = Array.isArray(settings.packages) ? settings.packages : [];
+	const have = new Set(current.map((s) => packageKey(String(s))));
+	const missing = wanted.filter((w) => !have.has(packageKey(String(w))));
+	if (missing.length === 0) return false;
+	settings.packages = [...current, ...missing];
+	try {
+		fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+		fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + "\n", "utf-8");
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 /**
- * 把团队清单（team/packages.json）里的包补进项目的 .pi/settings.json。
- * 只补不删、不动已有的，重复调用安全。
+ * 把团队清单（team/packages.json）里的包补进 settings。
+ *
+ * 补两处：
+ *   1. **全局**（~/.pi/agent/settings.json）—— 团队全员是全局装的，清单必须落到这里才生效
+ *   2. 项目级（.pi/settings.json）—— 只有该目录本来就是 pi 项目时才补
+ *
+ * 只补不删、不动已有的、重复调用安全。
  */
 function syncPackagesManifest(projectDir: string): PkgSync {
-	const projectSettings = path.join(projectDir, ".pi", "settings.json");
-	if (!fs.existsSync(projectSettings)) return "not-a-project";
-
 	const raw = readIfExists(packagesManifestFile);
 	if (!raw) return "none";
 	let wanted: unknown;
@@ -137,25 +171,26 @@ function syncPackagesManifest(projectDir: string): PkgSync {
 		return "error";
 	}
 	if (!Array.isArray(wanted) || wanted.length === 0) return "none";
+	const list = wanted.map(String);
 
-	let settings: any;
+	let changed = false;
+	// 1) 全局
 	try {
-		settings = JSON.parse(readIfExists(projectSettings) ?? "{}");
+		changed = addMissingPackages(path.join(getAgentDir(), "settings.json"), list) || changed;
 	} catch {
-		return "error";
+		// 全局写失败不影响项目级
 	}
-	const current: string[] = Array.isArray(settings.packages) ? settings.packages : [];
-	const have = new Set(current.map((s) => packageKey(String(s))));
-	const missing = (wanted as string[]).filter((w) => !have.has(packageKey(String(w))));
-	if (missing.length === 0) return "none";
+	// 2) 项目级（存在才补）
+	try {
+		const projectSettings = path.join(projectDir, ".pi", "settings.json");
+		if (fs.existsSync(projectSettings)) {
+			changed = addMissingPackages(projectSettings, list) || changed;
+		}
+	} catch {
+		// 同上
+	}
 
-	settings.packages = [...current, ...missing];
-	try {
-		fs.writeFileSync(projectSettings, JSON.stringify(settings, null, 2) + "\n", "utf-8");
-		return "added";
-	} catch {
-		return "error";
-	}
+	return changed ? "added" : "none";
 }
 
 export default function teamBaseline(pi: ExtensionAPI) {
@@ -186,7 +221,7 @@ export default function teamBaseline(pi: ExtensionAPI) {
 			pkgResult = syncPackagesManifest(projectDir);
 			if (pkgResult === "added") {
 				console.error(
-					`[team-baseline] 已把团队清单里的新包补进 .pi/settings.json —— 重启 pi 后生效，记得提交这个文件`,
+					`[team-baseline] 已按团队清单补上缺失的包 —— 重启 pi 后生效`,
 				);
 			}
 		} catch {
