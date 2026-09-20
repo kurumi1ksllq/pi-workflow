@@ -8,7 +8,7 @@
 2. 在项目根目录执行：
 
    ```bash
-   pi install -l git:github.com/kurumi1ksllq/pi-workflow@v1.0.1
+   pi install -l git:github.com/kurumi1ksllq/pi-workflow@v1.1.2
    ```
 
    `-l` = 写进项目设置 `.pi/settings.json`（不是你的个人全局设置）
@@ -28,7 +28,7 @@
 **推荐写法，`git:` 前缀不能省：**
 
 ```
-git:github.com/<org>/pi-workflow@v1.0.1
+git:github.com/<org>/pi-workflow@v1.1.2
 ```
 
 省掉前缀 pi 会当本地目录，报 `Path does not exist: ...\github.com\org\pi-workflow` ——
@@ -70,10 +70,10 @@ git:github.com/<org>/pi-workflow@v1.0.1
    git push && git push --tags
    ```
 
-3. 更新各项目的 `.pi/settings.json`：把 `@v1.0.0` 改成 `@v1.1.0`
+3. 更新各项目的 `.pi/settings.json` 里的 ref，以及本文件「成员怎么用」里的版本号
 4. 通知成员 pull
 
-`@v1.1.0` 这种带 ref 的写法是**钉死的** —— `pi update` 不会偷偷把成员的版本挪走，
+带 ref 的写法是**钉死的** —— `pi update` 不会偷偷把成员的版本挪走，
 只会在成员 pull 到新 ref 后把本地 clone 对齐过去。想回滚就改回旧 tag。
 
 ## 推完之后怎么验证
@@ -82,7 +82,7 @@ git:github.com/<org>/pi-workflow@v1.0.1
 
 ```bash
 mkdir pi-check && cd pi-check
-pi install -l --approve "git:github.com/kurumi1ksllq/pi-workflow@v1.0.1"
+pi install -l --approve "git:github.com/kurumi1ksllq/pi-workflow@v1.1.2"
 pi list --approve
 ```
 

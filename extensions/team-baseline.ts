@@ -34,22 +34,35 @@ export default function teamBaseline(pi: ExtensionAPI) {
 	pi.on("before_agent_start", async (event) => {
 		const rules = readIfExists(rulesFile);
 		if (!rules?.trim()) return;
-		return {
-			systemPrompt:
-				event.systemPrompt +
-				`
+		const injected =
+			event.systemPrompt +
+			`
 
 ## 团队基线规范
 
 以下规范来自团队 pi 基线包，优先级高于你的默认习惯：
 
 ${rules.trim()}
-`,
-		};
+`;
+		// 自证开关：PI_BASELINE_DEBUG=1 时把完整注入内容落到项目里，便于审计
+		if (process.env.PI_BASELINE_DEBUG) {
+			try {
+				const dir = path.join(process.cwd(), ".pi");
+				fs.mkdirSync(dir, { recursive: true });
+				fs.writeFileSync(path.join(dir, "team-baseline.debug.txt"), injected, "utf-8");
+			} catch {
+				// 调试输出失败不影响正常流程
+			}
+		}
+		return { systemPrompt: injected };
 	});
 
 	// 2. MCP 基线：只在项目没有 .mcp.json 时补，绝不覆盖已有的
 	pi.on("session_start", async (_event, ctx) => {
+		// 基线失效必须可见，不能静默
+		if (!fs.existsSync(rulesFile)) {
+			ctx.ui.notify("团队基线：读不到 team/RULES.md，团队规范没有被注入", "info");
+		}
 		const projectMcp = path.join(ctx.cwd, ".mcp.json");
 		if (fs.existsSync(projectMcp)) return;
 		const template = readIfExists(mcpTemplateFile);
