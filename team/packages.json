@@ -1,4 +1,7 @@
 {
   "_说明": "团队要一起用的第三方 pi 包写在这里，扩展会自动把它们补进各项目的 .pi/settings.json。留空则什么都不做。不要在同一个包里写重复项。",
-  "packages": []
+  "packages": [
+    "npm:pi-context-view",
+    "npm:pi-rtk-optimizer"
+  ]
 }
