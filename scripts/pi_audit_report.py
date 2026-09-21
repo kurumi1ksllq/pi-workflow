@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import statistics
 import sys
 from collections import Counter, defaultdict
@@ -24,6 +25,13 @@ from pathlib import Path
 TOKEN_KEYS = ("input", "cacheRead", "cacheWrite", "output")
 USAGE_KEYS = TOKEN_KEYS + ("reasoning", "totalTokens")
 DEFAULT_DIR = Path.home() / ".pi" / "agent" / "audit" / "logs"
+
+# 子代理 runId 就是 pi-subagents 生成的 uuid(36 字符)，两种产物都拿它做合并键
+RUN_ID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+# 「审计侧」列的三个取值（docs/audit-report.md §5）
+SUBAGENT_AUDITED = "已入审计(标记为子代理)"
+SUBAGENT_NOT_AUDITED = "未入审计"
+SUBAGENT_META_ONLY = "仅 meta"
 
 
 # --------------------------------------------------------------------------- #
@@ -132,6 +140,10 @@ def parse_args(argv=None):
                    help="打印 argsPreview/promptPreview 原文(仅 --session 模式)")
     p.add_argument("--all-days", action="store_true",
                    help="不限定日期，统计目录里全部日志（默认只算今天）")
+    p.add_argument("--sessions-dir", metavar="PATH",
+                   help="子代理产物目录（默认 ~/.pi/agent/sessions，PI_CODING_AGENT_DIR 兜底）")
+    p.add_argument("--no-subagents", action="store_true",
+                   help="不扫子代理产物（子代理段退化成一句提示）")
     p.add_argument("--self-test", action="store_true",
                    help="对真实日志跑一遍内建断言（spec §8 对账基线），不打印报表")
     return p.parse_args(argv)
@@ -164,6 +176,165 @@ def resolve_dirs(args):
 # --------------------------------------------------------------------------- #
 # 读日志
 # --------------------------------------------------------------------------- #
+def default_sessions_dir() -> Path:
+    """子代理产物目录：`~/.pi/agent/sessions`，`PI_CODING_AGENT_DIR` 兜底（与扩展同一套）。"""
+    env = os.environ.get("PI_CODING_AGENT_DIR") or ""
+    base = Path(env) if env.strip() else Path.home() / ".pi" / "agent"
+    return base / "sessions"
+
+
+def _run_id_from(name: str):
+    m = RUN_ID_RE.search(name or "")
+    return m.group(0) if m else None
+
+
+def _norm_meta_model(model):
+    """meta.model 带 provider 前缀(`newapi/deepseek/x`)，审计侧的 `model` 不带。
+    只在拿不到审计侧模型时兜底：剥掉第一段。拿得到审计侧就以审计侧为准。"""
+    if not isinstance(model, str) or not model:
+        return None
+    parts = model.split("/")
+    return "/".join(parts[1:]) if len(parts) >= 3 else model
+
+
+def scan_subagents(sessions_dir: Path, sessions=None):
+    """按 `runId` 合并两处互不覆盖的子代理产物(见 docs/audit-report.md §5)：
+
+    - `<项目编码>/subagent-artifacts/<runId>_<agent>_meta.json` —— 角色/模型/usage 权威源
+    - `<项目编码>/<父会话>/<runId>/run-0/session.jsonl`         —— 子会话本体，首行 `id` = 子 sessionId
+
+    两边 runId 对不上时用 usage 指纹兜底配对（`match_runs_by_usage`）。
+    返回 `(runs, stats, ok)`；目录不存在时 `ok=False`，不算错。
+    """
+    runs = {}
+    stats = {"metaFiles": 0, "run0Files": 0, "badJson": 0, "badRunId": 0,
+             "zeroTurns": 0,
+             "fingerprintMatched": 0, "fingerprintMiss": 0, "fingerprintAmbiguous": 0}
+    if not sessions_dir.is_dir():
+        return runs, stats, False
+
+    def slot(rid):
+        return runs.setdefault(rid, {
+            "runId": rid, "agent": None, "model": None, "metaUsage": None,
+            "childSessionId": None, "hasMeta": False, "hasRun0": False,
+            "matchBy": None,
+        })
+
+    for p in sorted(sessions_dir.rglob("subagent-artifacts/*_meta.json")):
+        stats["metaFiles"] += 1
+        rid = _run_id_from(p.name)
+        if not rid:
+            stats["badRunId"] += 1
+            continue
+        try:
+            doc = json.loads(p.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, ValueError) as exc:
+            print(f"[warn] 读不了 {p}：{exc}", file=sys.stderr)
+            stats["badJson"] += 1
+            continue
+        if not isinstance(doc, dict):
+            stats["badJson"] += 1
+            continue
+        r = slot(rid)
+        r["hasMeta"] = True
+        r["matchBy"] = "runId"
+        if isinstance(doc.get("agent"), str):
+            r["agent"] = doc["agent"]
+        if isinstance(doc.get("model"), str):
+            r["model"] = doc["model"]
+        u = doc.get("usage")
+        if isinstance(u, dict):
+            usage = {k: _num(u.get(k)) for k in TOKEN_KEYS}
+            usage["turns"] = _num(u.get("turns"))
+            r["metaUsage"] = usage
+
+    for p in sorted(sessions_dir.rglob("run-0/session.jsonl")):
+        stats["run0Files"] += 1
+        rid = p.parent.parent.name
+        if not RUN_ID_RE.fullmatch(rid or ""):
+            stats["badRunId"] += 1
+            continue
+        sid = None
+        try:
+            with p.open("r", encoding="utf-8", errors="replace") as fh:
+                first = json.loads(fh.readline())
+            if isinstance(first, dict) and isinstance(first.get("id"), str):
+                sid = first["id"]
+        except (OSError, ValueError) as exc:
+            print(f"[warn] 读不了 {p} 首行：{exc}", file=sys.stderr)
+            stats["badJson"] += 1
+        r = slot(rid)
+        r["hasRun0"] = True
+        r["childSessionId"] = sid
+
+    for r in runs.values():
+        u = r["metaUsage"]
+        if u and u["turns"] == 0 and not any(u[k] for k in TOKEN_KEYS):
+            stats["zeroTurns"] += 1
+
+    match_runs_by_usage(runs, sessions or {}, stats)
+    return runs, stats, True
+
+
+def _usage_fingerprint(agent, model, usage, turns):
+    """一轮 run 的指纹：角色 + 规范化模型 + 五个数字。
+
+    只有能唯一对上时才用于兜底配对（见 `match_runs_by_usage`），所以指纹越严越好。
+    """
+    if not usage or not any(usage.get(k) for k in TOKEN_KEYS):
+        return None
+    if not turns:
+        return None
+    return (agent or "未知", _norm_meta_model(model),
+            tuple(usage.get(k) or 0 for k in TOKEN_KEYS), turns)
+
+
+def match_runs_by_usage(runs, sessions, stats):
+    """兜底配对：meta 的 `runId` 与 run-0 目录名对不上时，用「角色+模型+五个数字」配对。
+
+    真实数据里见过：一次子代理 run 只落了 meta，run-0 目录挂的是**另一个** runId，
+    但两者 usage 逐项相等（同一个子会话，两个产物各记了一份）。严格按 runId join 就永远对不上，
+    故允许指纹兜底——**只接受一对一唯一命中**，命中不了就不配（宁可不配也不瞎配）。
+
+    配对成功后在两边都盖 `pairedWith`/`matchBy`，并把 meta 行合进 run-0 那一行
+    （runId 保留 run-0 那个，因为目录里就长这样）。
+    """
+    metas, run0s = [], []
+    for rid, r in runs.items():
+        if r["hasMeta"] and not r["hasRun0"]:
+            fp = _usage_fingerprint(r["agent"], r["model"], r["metaUsage"],
+                                    (r["metaUsage"] or {}).get("turns"))
+            if fp:
+                metas.append((rid, fp))
+        elif r["hasRun0"] and not r["hasMeta"]:
+            s = sessions.get(r["childSessionId"]) if r["childSessionId"] else None
+            if not s or not s["usageCalls"]:
+                continue
+            fp = _usage_fingerprint(None, s.get("model"), s["tokens"], s["usageCalls"])
+            if fp:
+                run0s.append((rid, fp))
+
+    for rid_m, fp_m in metas:
+        # 审计侧指纹里角色是未知（run-0 不知道角色），只比模型+数字那 3 段
+        hits = [rid_c for rid_c, fp_c in run0s if fp_c[1:] == fp_m[1:]]
+        if len(hits) != 1:
+            stats["fingerprintAmbiguous" if hits else "fingerprintMiss"] += 1
+            continue
+        rid_c = hits[0]
+        m, c = runs[rid_m], runs[rid_c]
+        if c["agent"] and m["agent"] and c["agent"] != m["agent"]:
+            stats["fingerprintAmbiguous"] += 1
+            continue
+        c["agent"] = c["agent"] or m["agent"]
+        c["model"] = c["model"] or m["model"]
+        c["hasMeta"] = True
+        c["metaUsage"] = m["metaUsage"]
+        c["matchBy"] = "usage"
+        m["pairedWith"] = rid_c
+        stats["fingerprintMatched"] += 1
+        run0s = [(x, f) for x, f in run0s if x != rid_c]
+
+
 def discover_files(dir_path: Path, since, until):
     """按文件名日期预筛；名字不是 YYYY-MM-DD.jsonl 的照收，交给 ts 过滤。"""
     if not dir_path.is_dir():
@@ -357,10 +528,121 @@ def aggregate(events):
     return S, daily, bymodel
 
 
+def build_subagents(audit_sessions, runs, enabled, sessions_dir):
+    """子代理段数据（docs/audit-report.md §5）。
+
+    口径铁则：**子代理段只做标签化，不往总量里加一次**。
+    - 概览 `总 token` 始终 = 审计日志全集（已入审计的子代理本来就在里面）
+    - `meta.usage` 只在「仅 meta」行里展示，单列出「未入审计」合计，绝不并进总 token
+
+    `audit_sessions` 必须是**未过滤的全量会话**（`main()` 负责保证）：`--session/--since/--until`
+    会把审计日志过滤掉，若子代理段用过滤后的口径，占比分子会被削到 0 而分母仍是全量，
+    同一页里两个口径打架。
+
+    返回 `(section_dict, type_by_sessionId)`。
+    """
+    audit_sessions = audit_sessions or {}
+    type_by_sid = {}
+    groups = {}
+
+    def group(agent, model):
+        key = (agent or "未知", model or "(未知)")
+        return groups.setdefault(key, {
+            "role": agent or "未知", "model": model, "runs": 0,
+            "metaUsage": {k: 0 for k in TOKEN_KEYS}, "metaTurns": 0,
+            "auditUsage": {k: 0 for k in TOKEN_KEYS}, "auditTurns": 0,
+            "auditedRuns": 0, "metaOnlyRuns": 0,
+            "mismatch": False, "usageMatched": 0,
+        })
+
+    for r in sorted(runs.values(), key=lambda x: x["runId"]):
+        if r.get("pairedWith"):
+            continue  # 这条 meta 已合进被配对的 run-0 那一行，不重复计数
+        s = audit_sessions.get(r["childSessionId"]) if r["childSessionId"] else None
+        audit_t = s["tokens"] if s else None
+        audit_turns = s["usageCalls"] if s else 0
+        # 模型：审计侧有就用审计侧的（同一个模型，审计侧模型会带 newapi/ 前缀差异，以审计侧为准）
+        model = (s.get("model") if s else None) or _norm_meta_model(r["model"])
+        g = group(r["agent"], model)
+        g["runs"] += 1
+        if r.get("matchBy") == "usage":
+            g["usageMatched"] += 1
+
+        if r["hasMeta"] and r["metaUsage"]:
+            for k in TOKEN_KEYS:
+                g["metaUsage"][k] += r["metaUsage"][k]
+            g["metaTurns"] += r["metaUsage"].get("turns") or 0
+        if audit_t:
+            g["auditedRuns"] += 1
+            g["auditTurns"] += audit_turns
+            for k in TOKEN_KEYS:
+                g["auditUsage"][k] += audit_t[k]
+            type_by_sid[r["childSessionId"]] = f"子代理:{r['agent'] or '未知'}"
+        if r["hasMeta"] and not (r["hasRun0"] and audit_t):
+            g["metaOnlyRuns"] += 1
+        # 对账：两侧都有数字才比（meta 的 turns=0 / 侧边缺失不算不一致）
+        if r["hasMeta"] and r["metaUsage"] and audit_t:
+            for k in TOKEN_KEYS:
+                if r["metaUsage"][k] != audit_t[k]:
+                    g["mismatch"] = True
+
+    rows = []
+    for (role, model), g in sorted(
+            groups.items(),
+            key=lambda kv: -max(sum(kv[1]["auditUsage"].values()), sum(kv[1]["metaUsage"].values()))):
+        if g["auditedRuns"] and not g["metaOnlyRuns"]:
+            side = SUBAGENT_AUDITED
+        elif g["auditedRuns"]:
+            side = f"{SUBAGENT_AUDITED} + 仅 meta"
+        elif g["metaOnlyRuns"]:
+            side = SUBAGENT_META_ONLY
+        else:
+            side = SUBAGENT_NOT_AUDITED
+        rows.append({
+            "role": role, "model": model, "runs": g["runs"], "side": side,
+            "metaUsage": dict(g["metaUsage"]), "metaTurns": g["metaTurns"],
+            "auditUsage": dict(g["auditUsage"]), "auditTurns": g["auditTurns"],
+            "mismatch": g["mismatch"], "metaOnlyRuns": g["metaOnlyRuns"],
+            "usageMatched": g["usageMatched"],
+        })
+
+    totals = {
+        "runs": 0,
+        "metaOnly": {k: 0 for k in TOKEN_KEYS}, "metaOnlyRuns": 0,
+        "audit": {k: 0 for k in TOKEN_KEYS}, "auditedRuns": 0,
+    }
+    for r in runs.values():
+        if r.get("pairedWith"):
+            continue
+        totals["runs"] += 1
+        s = audit_sessions.get(r["childSessionId"]) if r["childSessionId"] else None
+        if r["hasMeta"] and r["metaUsage"] and not s:
+            totals["metaOnlyRuns"] += 1
+            for k in TOKEN_KEYS:
+                totals["metaOnly"][k] += r["metaUsage"][k]
+        if s:
+            totals["auditedRuns"] += 1
+            for k in TOKEN_KEYS:
+                totals["audit"][k] += s["tokens"][k]
+
+    audit_total = sum(sum(s["tokens"][k] for k in TOKEN_KEYS) for s in audit_sessions.values())
+    return {
+        "enabled": enabled,
+        "sessionsDir": str(sessions_dir),
+        "exists": sessions_dir.is_dir(),
+        "rows": rows,
+        "totals": totals,
+        "auditTotalTokens": audit_total,
+        "auditedShare": _pct(sum(totals["audit"].values()), audit_total),
+        "metaOnlyTotal": sum(totals["metaOnly"].values()),
+        "usageMatchedRuns": sum(1 for r in runs.values() if r.get("matchBy") == "usage"),
+    }, type_by_sid
+
+
 # --------------------------------------------------------------------------- #
 # 报表数据
 # --------------------------------------------------------------------------- #
-def build_data(args, entries, sessions, daily, bymodel, stats, events):
+def build_data(args, entries, sessions, daily, bymodel, stats, events, subagents=None, sid_types=None):
     R = {"generatedAt": datetime.now().astimezone().isoformat(timespec="seconds"),
          "sources": [], "overview": {}, "tokensByDay": [], "tokensByModel": [],
          "topSessions": [], "byPerson": None, "tools": [], "skills": [],
@@ -408,6 +690,7 @@ def build_data(args, entries, sessions, daily, bymodel, stats, events):
         t = s["tokens"]
         R["topSessions"].append({
             "sessionId": s["sessionId"], "cwd": s["cwd"], "model": s["model"],
+            "type": (sid_types or {}).get(s["sessionId"]) or "父会话",
             **t, "cacheReadPct": _pct(t["cacheRead"], t["totalTokens"]),
             "settled": bool(s["settled"]),
         })
@@ -509,6 +792,7 @@ def build_data(args, entries, sessions, daily, bymodel, stats, events):
     if args.prices:
         R["cost"] = build_cost(args.prices, bymodel)
 
+    R["subagents"] = subagents
     R["observations"] = build_observations(R, grand)
     return R
 
@@ -627,6 +911,16 @@ def build_observations(R, grand) -> list:
     if cp["growing"]:
         obs.append(f"{len(cp['growing'])} 个会话压缩 ≥2 次后 cacheRead 仍在涨，值得看上下文是否失控。")
 
+    sub = R.get("subagents")
+    if sub and sub["enabled"] and sub["exists"] and sub["totals"]["runs"]:
+        t = sub["totals"]
+        line = (f"子代理共 {_fmt(t['runs'])} 个 run，审计侧已标记 {_fmt(t['auditedRuns'])} 个、"
+                f"占全部消耗 {sub['auditedShare']}（见「子代理」表）。")
+        if sub["metaOnlyTotal"]:
+            line += (f" 另有 {_fmt(sub['metaOnlyTotal'])} token 只在 meta.json 里，"
+                     f"审计侧看不到，未计入总 token。")
+        obs.append(line)
+
     if ov["skippedLines"]:
         obs.append(f"跳过 {_fmt(ov['skippedLines'])} 行（空行或坏 JSON），已计入概览，未静默吞。")
     if ov["incompleteSessions"]:
@@ -658,6 +952,88 @@ def _token_headers(first="") -> list:
 def _token_row(key, d, pct):
     return [key, _fmt(d.get("input")), _fmt(d.get("cacheRead")), _fmt(d.get("cacheWrite")),
             _fmt(d.get("output")), _fmt(d.get("reasoning")), _fmt(d.get("totalTokens")), pct]
+
+
+def render_subagents(sub) -> list:
+    """「子代理」段（§5）。只做标签化：meta 侧数字单列，不进总 token。"""
+    L = ["## 3. 子代理", ""]
+    if sub is None or not sub["enabled"]:
+        L.append("> `--no-subagents`：未扫描子代理产物。")
+        L.append("")
+        return L
+    if not sub["exists"]:
+        L.append(f"> 子代理产物目录不存在：`{sub['sessionsDir']}`（`--sessions-dir` 可指定）。")
+        L.append("")
+        return L
+
+    rows = []
+    for r in sub["rows"]:
+        m, a = r["metaUsage"], r["auditUsage"]
+        has_meta = any(m[k] for k in TOKEN_KEYS) or r["metaTurns"]
+        has_audit = any(a[k] for k in TOKEN_KEYS) or r["auditTurns"]
+        # 数字列取「审计侧优先」——已入审计的 run 其 token 本来就在概览总量里，
+        # 若这里填 meta 会打出 0（子代理进程没加载审计扩展时 meta 才有数），与合计行自相矛盾。
+        # 口径列显式标出这行数字取自哪侧；「仅 meta」部分的数字看合计行，不混进同一格。
+        if has_audit:
+            nums, src, turns = a, "审计", r["auditTurns"]
+        elif has_meta:
+            nums, src, turns = m, "meta", r["metaTurns"]
+        else:
+            nums, src, turns = {k: 0 for k in TOKEN_KEYS}, "—", 0
+        if has_meta and has_audit:
+            # 两侧都有数字才逐项比对；只一侧有数字无从对账，记「—」不评好坏
+            if r["mismatch"]:
+                recon = "✗ " + "，".join(f"{k} 审计={_fmt(a[k])} meta={_fmt(m[k])}"
+                                        for k in TOKEN_KEYS if a[k] != m[k])
+            elif r["usageMatched"]:
+                # 顺序依赖：mismatch 先判，所以「指纹配对」分支只会在本组两侧全等时走到。
+                # 配对成功的判定本身就是指纹逐项相等，这里的 ✓ 与文档"逐项全等"同义。
+                recon = f"✓ 指纹配对 {r['usageMatched']} 个"
+            else:
+                recon = "✓"
+        else:
+            recon = "—"
+        rows.append([r["role"], _code(r["model"]), _fmt(r["runs"]), src,
+                     _fmt(nums["input"]), _fmt(nums["cacheRead"]), _fmt(nums["cacheWrite"]),
+                     _fmt(nums["output"]), _fmt(turns), r["side"], recon])
+    L.append(md_table(["角色", "模型", "run 数", "数字口径", "input", "cacheRead", "cacheWrite",
+                       "output", "turns", "审计侧", "对账"],
+                      rows or [["(无)", "-", "0", "-", "-", "-", "-", "-", "-", "-", "-"]]))
+    t = sub["totals"]
+    mo, au = t["metaOnly"], t["audit"]
+    L.append("")
+    L.append(md_table(["合计", "run 数", "input", "cacheRead", "cacheWrite", "output", "口径"], [
+        ["审计侧已标记为子代理", _fmt(t["auditedRuns"]), _fmt(au["input"]), _fmt(au["cacheRead"]),
+         _fmt(au["cacheWrite"]), _fmt(au["output"]), "含在概览总 token 里"],
+        ["仅 meta(未入审计)", _fmt(t["metaOnlyRuns"]), _fmt(mo["input"]), _fmt(mo["cacheRead"]),
+         _fmt(mo["cacheWrite"]), _fmt(mo["output"]), "**不并进总 token**"],
+    ]))
+    L.append("")
+    L.append(f"总 {_fmt(t['runs'])} 个 run：子代理占全部消耗 **{sub['auditedShare']}**"
+             f"（审计侧子代理 {_fmt(sum(au.values()))} / 全部 {_fmt(sub['auditTotalTokens'])}）。")
+    if sub.get("usageMatchedRuns"):
+        st = sub.get("stats") or {}
+        L.append("")
+        L.append(f"> 其中 {_fmt(sub['usageMatchedRuns'])} 个 run 的 meta 与 run-0 目录 **runId 对不上**，"
+                 f"靠「角色+模型+五个数字」指纹唯一命中配对（`matchBy=usage`）；"
+                 f"另有 未命中 {_fmt(st.get('fingerprintMiss', 0))} / 歧义放弃 {_fmt(st.get('fingerprintAmbiguous', 0))} 个。"
+                 f"指纹配对是**启发式**，不保证与 runId join 等价。")
+    st = sub.get("stats") or {}
+    if st.get("zeroTurns"):
+        L.append("")
+        L.append(f"> 另有 {_fmt(st['zeroTurns'])} 个 run 的 meta `turns=0` 且 token 全 0"
+                 f"（子代理启动即失败/被中断），**不进指纹配对**，也无法与审计侧对账。")
+    if sub["metaOnlyTotal"]:
+        L.append("")
+        L.append(f"⚠ 另有 {_fmt(sub['metaOnlyTotal'])} token 只存在于 meta.json，审计侧看不到"
+                 f"（子代理进程没有加载审计扩展）——这部分**不计入概览总 token**。")
+    L.append("")
+    L.append("> 口径：两处产物优先按 `runId` 合并去重；`runId` 对不上时用 usage 指纹兜底（见下）。"
+             "角色/模型取 `subagent-artifacts/*_meta.json`；"
+             "「审计侧」数字取审计日志里子会话 `sessionId` 的 `assistant_usage`（`run-0/session.jsonl` 首行 `id`）。"
+             "同一子代理**只数一次**，不把 meta 的 usage 再加一遍。")
+    L.append("")
+    return L
 
 
 def render_markdown(R, args) -> str:
@@ -709,17 +1085,20 @@ def render_markdown(R, args) -> str:
     L.append("")
     rows = []
     for s in R["topSessions"]:
-        rows.append([_short_id(s["sessionId"]), _code(s["cwd"]), _code(s["model"]),
+        rows.append([_short_id(s["sessionId"]), s["type"], _code(s["cwd"]), _code(s["model"]),
                      _fmt(s["input"]), _fmt(s["cacheRead"]), _fmt(s["cacheWrite"]),
                      _fmt(s["output"]), _fmt(s["reasoning"]), _fmt(s["totalTokens"]), s["cacheReadPct"],
                      "是" if s["settled"] else "否"])
-    L.append(md_table(["会话", "cwd", "模型", "input", "cacheRead", "cacheWrite",
+    L.append(md_table(["会话", "类型", "cwd", "模型", "input", "cacheRead", "cacheWrite",
                        "output", "reasoning", "total", "cacheRead 占比", "收敛"], rows or [["(无数据)"]]))
     L.append("")
 
-    # 3 按人
+    # 3 子代理
+    L.extend(render_subagents(R.get("subagents")))
+
+    # 4 按人
     if R["byPerson"] is not None:
-        L.append("## 3. 按人")
+        L.append("## 4. 按人")
         L.append("")
         rows = []
         for p in R["byPerson"]:
@@ -732,8 +1111,8 @@ def render_markdown(R, args) -> str:
                            "reasoning", "total", "cacheRead 占比", "工具调用", "失败/结果", "失败率"], rows))
         L.append("")
 
-    # 4 工具
-    L.append("## 4. 工具")
+    # 5 工具
+    L.append("## 5. 工具")
     L.append("")
     rows = []
     for t in R["tools"]:
@@ -751,8 +1130,8 @@ def render_markdown(R, args) -> str:
                  f"失败率分母只取 `tool_result`）。")
         L.append("")
 
-    # 5 skill 命中
-    L.append("## 5. skill 命中")
+    # 6 skill 命中
+    L.append("## 6. skill 命中")
     L.append("")
     rows = []
     for sk in R["skills"]:
@@ -773,8 +1152,8 @@ def render_markdown(R, args) -> str:
              "命中次数 = 出现条数。来源取自 `sourceInfo.source`。")
     L.append("")
 
-    # 6 完成度
-    L.append("## 6. 完成度")
+    # 7 完成度
+    L.append("## 7. 完成度")
     L.append("")
     c = R["completion"]
     L.append(md_table(["项", "值"], [
@@ -793,8 +1172,8 @@ def render_markdown(R, args) -> str:
                             "是" if u["incomplete"] else "否"] for u in c["unsettled"]]))
         L.append("")
 
-    # 7 上下文压力
-    L.append("## 7. 上下文压力")
+    # 8 上下文压力
+    L.append("## 8. 上下文压力")
     L.append("")
     cp = R["contextPressure"]
     L.append(md_table(["项", "值"], [
@@ -818,9 +1197,9 @@ def render_markdown(R, args) -> str:
                             _fmt(g["cacheReadFirst"]), _fmt(g["cacheReadLast"])] for g in cp["growing"]]))
         L.append("")
 
-    # 8 成本
+    # 9 成本
     if R["cost"] is not None:
-        L.append("## 8. 成本（折算）")
+        L.append("## 9. 成本（折算）")
         L.append("")
         cost = R["cost"]
         if cost.get("error"):
@@ -849,8 +1228,8 @@ def render_markdown(R, args) -> str:
                      "本报表里的 `结果字符数`、`systemPromptChars` 等是**字符口径**，两者不可互相换算，也不参与计费。")
             L.append("")
 
-    # 9 观察
-    L.append("## 9. 观察")
+    # 10 观察
+    L.append("## 10. 观察")
     L.append("")
     for i, o in enumerate(R["observations"], 1):
         L.append(f"{i}. {o}")
@@ -920,7 +1299,27 @@ def self_test() -> int:
     assert s["seqGaps"] == 0, "该会话 seq 应连续"
     t = s["tools"]["bash"]
     assert (t["calls"], t["results"], t["errors"]) == (1, 1, 0), f"bash 应为 1 调用 0 失败，实际 {t}"
-    print("PASS: 对账基线全部一致 " + json.dumps(baseline, ensure_ascii=False))
+
+    # —— 子代理段（阶段 1）：拿本机真实产物验「合并去重 + 标签化 + 不进总量」
+    all_events, _, _ = load_events(log, None)
+    sessions_all, _, _ = aggregate(all_events)
+    runs, _, ok = scan_subagents(default_sessions_dir(), sessions_all)
+    if not ok or not runs:
+        print(f"SKIP: 子代理产物目录没有数据（{default_sessions_dir()}）")
+        return 0
+    # 占比要用**整个日志文件**的口径，不能只看上面那一个会话
+    assert all(r["hasMeta"] or r["hasRun0"] for r in runs.values()), "每个 run 至少得有一侧产物"
+    sub, sid_types = build_subagents(sessions_all, runs, True, default_sessions_dir())
+    assert sub["totals"]["runs"] == len(runs) - sub["usageMatchedRuns"], "run 数与扫描结果不求一致"
+    for sid, kind in sid_types.items():
+        assert kind.startswith("子代理:"), f"{sid[:8]} 类型应为 子代理:*，实际 {kind}"
+    # meta 侧的 token 一点都不能进总量：总量仍是审计全集
+    assert sub["auditTotalTokens"] == sum(x["tokens"]["totalTokens"] for x in sessions_all.values()), \
+        "子代理段不得改变概览总 token"
+    print(f"PASS: 对账基线全部一致 {json.dumps(baseline, ensure_ascii=False)}；"
+          f"子代理 {sub['totals']['runs']} 个 run（其中 {sub['usageMatchedRuns']} 个靠指纹配对），"
+          f"审计侧占比 {sub['auditedShare']}，"
+          f"仅 meta 未入审计 {sub['metaOnlyTotal']:,} token（未计入总量）")
     return 0
 
 
@@ -961,12 +1360,21 @@ def main(argv=None) -> int:
             events.extend(evs)
             stats["lines"] += lines
             stats["skipped"] += skipped
+    # 文件名预筛之外的文件（子代理段要全量口径时用来补齐；常见情况为空，零额外开销）
+    _seen_files = set(files)
+    extra_files = [(f, label) for path, label in entries
+                   for f in discover_files(path, None, None) if f not in _seen_files]
 
     if not files:
         where = "、".join(str(p) for p, _ in entries)
         print(f"[提示] 在 {where} 没找到匹配的日志文件（日期范围 "
               f"{args._since or '不限'} ~ {args._until or '不限'}），没有可统计的数据。")
         return 0
+
+    # 子代理段的审计侧一律用**全量**口径（不受 --since/--until/--session 影响）：
+    # 子代理产物本身不按日期过滤，若审计侧只取当前范围，范围外的子代理会被误标「未入审计」，
+    # 而占比分子又被 --session 削到 0、分母仍是全量——同一页里两个口径打架。
+    unfiltered = events
 
     # 日期过滤(按 ts 本地时区切天)
     if args._since or args._until:
@@ -991,14 +1399,35 @@ def main(argv=None) -> int:
             return 0
 
     sessions, daily, bymodel = aggregate(events)
+    if args.no_subagents or (unfiltered is events and not extra_files):
+        all_sessions = sessions
+    else:
+        all_events = list(unfiltered)
+        for f, label in extra_files:
+            evs, _, _ = load_events(f, label)
+            all_events.extend(evs)
+        all_sessions = aggregate(all_events)[0]
     if args.session and len(sessions) > 1:
         print(f"[提示] 前缀 {args.session} 命中 {len(sessions)} 个会话，全部纳入统计。", file=sys.stderr)
+
+    # 子代理产物：与审计日志完全独立的另一路扫描（--no-subagents 关掉）
+    sessions_dir = Path(args.sessions_dir) if args.sessions_dir else default_sessions_dir()
+    subagents, sid_types = None, {}
+    if not args.no_subagents:
+        # 指纹兜底配对依赖审计侧 usage 才能去重，所以扫描也用全量会话（否则过滤后配不上，同一 run 会算两次）
+        runs, sub_stats, ok = scan_subagents(sessions_dir, all_sessions)
+        subagents, sid_types = build_subagents(all_sessions, runs, True, sessions_dir)
+        subagents["stats"] = sub_stats
+        if not ok:
+            print(f"[提示] 子代理产物目录不存在：{sessions_dir}（子代理段跳过）", file=sys.stderr)
+        elif not runs:
+            print(f"[提示] {sessions_dir} 下没扫到子代理产物（子代理段为空）", file=sys.stderr)
 
     if args.show_args:
         args._preview_events = [e for e in events
                                 if e.get("argsPreview") is not None or e.get("promptPreview") is not None]
 
-    R = build_data(args, entries, sessions, daily, bymodel, stats, events)
+    R = build_data(args, entries, sessions, daily, bymodel, stats, events, subagents, sid_types)
 
     if args.json:
         text = json.dumps(to_json_data(R), ensure_ascii=False, indent=2) + "\n"
