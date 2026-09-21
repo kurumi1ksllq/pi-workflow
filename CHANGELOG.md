@@ -17,7 +17,8 @@
   （pi 0.86.1 源码 + 隔离 agent 目录实测）；pi 自己始终只提示、不自动应用
 - 测试：新增 `scripts/test-self-update.mjs`（离线、秒级、不联网 —— 造本地 bare 仓库当远端、按 pi 目录约定搓 clone、
   直接 import clone 里的扩展）覆盖 5 个场景；`test-extension.mjs` 加场景 8（挑最新 tag 的版本比较，1.10.0 要赢过 1.9.9）；
-  `simulate-member.sh` 加第 7 步（把 clone 退回一格 → 启动 → 断言自动拉回 tag）
+  `simulate-member.sh` 加第 7 步（把 origin 换成带假 tag 的本地 bare 仓库 → 启动 → 断言自动切到新 tag、
+  settings 的 ref 跟着改）
 - README / ONBOARDING 的「成员如何更新基线」整节重写
 
 ## v1.8.0

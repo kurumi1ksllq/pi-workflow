@@ -127,16 +127,29 @@ STATE="$SB/agent/extensions/team-baseline/update-state.json"
 if [ -d "$CLONE/.git" ]; then
 	case "$V" in
 	v[0-9]*)
-		git -C "$CLONE" reset --hard -q HEAD~1
-		echo "  先把 clone 退回一格（模拟成员落后）：$(git -C "$CLONE" log --oneline -1)"
+		# 真实 GitHub 上没有「比刚发的这版更新的 tag」可拉，所以把 origin 换成
+		# 一个本地 bare 仓库（内容就是刚装下来的这份 + 一个更高的假 tag v9.9.9）：
+		# 这样既保持「扩展代码来自 clone 自己」，又能真的触发一次自动更新。
+		FAKE="$SB/fake-origin/pi-workflow.git"
+		mkdir -p "$(dirname "$FAKE")"
+		git -c advice.detachedHead=false clone -q --bare "$CLONE" "$FAKE"
+		git -c advice.detachedHead=false clone -q "$FAKE" "$SB/fake-work"
+		# 源 clone 是 detached HEAD（pi 装 tag 时就是那样），工作副本没有分支 —— 所以只推 tag，
+		# 不碰 main（自动更新读的就是 ls-remote --tags）
+		git -C "$SB/fake-work" -c user.name=sim -c user.email=sim@example.com commit -q --allow-empty -m "假的新版本（仅用于验证自动更新）"
+		git -C "$SB/fake-work" tag v9.9.9
+		git -C "$SB/fake-work" push -q origin v9.9.9
+		want="$(git -C "$SB/fake-work" rev-parse v9.9.9^{commit})"
+		git -C "$CLONE" remote set-url origin "$FAKE"
 		rm -f "$STATE" # 清掉 TTL 状态，强制本轮真去查远端
+		echo "  远端已放上假 tag v9.9.9（$want）；clone 当前：$(git -C "$CLONE" log --oneline -1)"
 		(cd "$SB/proj" && PI_BASELINE_UPDATE_TTL_HOURS=0 pi -p "ok" 2>&1 | grep -a "team-baseline" || echo "  （没有 team-baseline 输出 —— 自动更新没跑起来）")
-		want="$(git -C "$CLONE" ls-remote origin "refs/tags/$V" 2>/dev/null | awk '{print $1}')"
 		now="$(git -C "$CLONE" rev-parse HEAD)"
-		if [ -n "$want" ] && [ "$now" = "$want" ]; then
-			echo "  ✓ 已自动拉回 $V：$(git -C "$CLONE" log --oneline -1)"
+		if [ "$now" = "$want" ]; then
+			echo "  ✓ 已自动更新到最新 tag：$(git -C "$CLONE" log --oneline -1)"
+			echo "  ✓ settings 里的 ref：$(grep -o 'pi-workflow@[^\"]*' "$SB/agent/settings.json" | head -1)"
 		else
-			echo "  ✗ 没回到 $V（现在 HEAD=$now，期望=$want）—— 自动更新链路有问题"
+			echo "  ✗ 没跟上（现在 HEAD=$now，期望=$want）—— 自动更新链路有问题"
 		fi
 		;;
 	*)
@@ -154,5 +167,5 @@ fi
 echo
 echo "判据：① pi list 每项都带安装路径 ② node_modules 里有清单里的包 ③ rtk 能被找到"
 echo "      ④ settings.json 里有 subagents 和 compaction ⑤ 扩展配置已补（rtk + 审计）"
-echo "      ⑥ 模板说明键没泄漏 ⑦ 审计日志真写出来了且没有重复加载 ⑧ 自动更新把退后的 clone 拉回了 tag"
+echo "      ⑥ 模板说明键没泄漏 ⑦ 审计日志真写出来了且没有重复加载 ⑧ 自动更新跟上了新 tag（用本地假远端验）"
 echo "清理：rm -rf \"$SB\""

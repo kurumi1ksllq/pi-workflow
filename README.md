@@ -9,7 +9,7 @@
 2. 全局装基线：
 
    ```bash
-   pi install git:github.com/kurumi1ksllq/pi-workflow@v1.9.0
+   pi install git:github.com/kurumi1ksllq/pi-workflow@v1.9.1
    ```
 
    **注意没有 `-l`** —— 这是全局安装，落到 `~/.pi/agent/settings.json`，
@@ -27,7 +27,7 @@
 **推荐写法，`git:` 前缀不能省：**
 
 ```
-git:github.com/<org>/pi-workflow@v1.9.0
+git:github.com/<org>/pi-workflow@v1.9.1
 ```
 
 省掉前缀 pi 会当本地目录，报 `Path does not exist: ...\github.com\org\pi-workflow` ——
@@ -135,7 +135,7 @@ node scripts/test-self-update.mjs
 一行命令，在隔离目录里模拟一个**全新成员**：
 
 ```bash
-bash scripts/simulate-member.sh v1.9.0
+bash scripts/simulate-member.sh v1.9.1
 ```
 
 它做的事：造一个独立的 agent 配置目录（不碰你本机的 `~/.pi/agent`）+
@@ -145,14 +145,14 @@ bash scripts/simulate-member.sh v1.9.0
 **判据**：`User packages` 里每一项都**带安装路径**（`pi-workflow` + 清单里的那些包）、
 隔离目录的 `npm/node_modules` 里确实有它们、rtk 能被 `command -v` 找到、
 隔离目录的 `settings.json` 里出现 `subagents` 与 `compaction`、
-`extensions/pi-rtk-optimizer/config.json` 存在、最后一步把 clone 退回一格后**下次启动又自动拉回了 tag**。
+`extensions/pi-rtk-optimizer/config.json` 存在、最后一步把 origin 换成带假 tag 的本地远端后**下次启动自动跟上了新 tag**。
 只看到包名没有路径 = 还在设置里没装上 —— 少了第二次启动。
 
 手工等价流程：
 
 ```bash
 SB='C:\Users\<你>\pi-check-agent'   # 隔离的 agent 目录，Windows 路径写法
-PI_CODING_AGENT_DIR="$SB" pi install git:github.com/kurumi1ksllq/pi-workflow@v1.9.0
+PI_CODING_AGENT_DIR="$SB" pi install git:github.com/kurumi1ksllq/pi-workflow@v1.9.1
 # 隔离目录不带凭据，启动前把 auth.json / models.json 拷进去
 PI_CODING_AGENT_DIR="$SB" pi -p ok    # 第一次：扩展写清单 + 补 rtk + 补共享设置
 PI_CODING_AGENT_DIR="$SB" pi list     # 应看到清单里的包都带路径
