@@ -382,6 +382,150 @@ await handlers2.tool_execution_start({ type: "tool_execution_start", toolCallId:
 	}
 }
 
+// —— 场景 10：阶段 2 —— config 配置指纹 ——
+// 只记名称/尺寸/哈希：同配置两次指纹相同，改任一项必须变，且全文不含任何正文。
+{
+	const agentDir = process.env.PI_CODING_AGENT_DIR;
+	fs.mkdirSync(agentDir, { recursive: true });
+	const settingsFile = path.join(agentDir, "settings.json");
+	// 正文哨兵：settings 的内容与 contextFiles 的内容都不许出现在日志里
+	const SETTINGS_BODY = "s3ttings-body-sentinel";
+	const CONTEXT_BODY = "c0ntext-file-body-sentinel";
+	fs.writeFileSync(settingsFile, JSON.stringify({ theme: "dark", note: SETTINGS_BODY }), "utf8");
+
+	const mkOptions = () => ({
+		skills: [
+			{
+				name: "commit-convention",
+				description: "d".repeat(50),
+				filePath: "C:\\a\\SKILL.md",
+				baseDir: "C:\\a",
+				sourceInfo: { source: "git:github.com/kurumi1ksllq/pi-workflow@v1.9.1", scope: "user", origin: "package" },
+			},
+			{ name: "ponytail", description: "p", filePath: "C:\\b\\SKILL.md", baseDir: "C:\\b", sourceInfo: { source: "git:github.com/kurumi1ksllq/pi-workflow@v1.9.1" } },
+			{ name: "other", description: "o", filePath: "C:\\c\\SKILL.md", baseDir: "C:\\c", sourceInfo: { source: "npm:pi-lens@4.2.1" } },
+		],
+		selectedTools: ["read", "bash", "edit"],
+		toolSnippets: { read: "read a file", bash: "run a command", edit: "edit a file" },
+		contextFiles: [
+			{ path: "C:\\proj\\AGENTS.md", content: "x".repeat(2951) },
+			{ path: "C:\\proj\\sub\\NOTES.md", content: CONTEXT_BODY },
+		],
+	});
+	const mkCtx = (over) => ({
+		...ctx,
+		scopedModels: [{ model: { id: "z-ai/glm-5.3-flash" } }, { model: { id: "deepseek/deepseek-v4.1-flash" } }],
+		thinkingLevel: "off",
+		mode: "print",
+		...over,
+	});
+	const runSession = async (options, c) => {
+		const h = await loadFresh();
+		await h.before_agent_start({ type: "before_agent_start", prompt: "x", systemPrompt: "P", systemPromptOptions: options }, c);
+		const line = readLines().findLast((l) => JSON.parse(l).event === "session");
+		return { rec: JSON.parse(line), line };
+	};
+
+	const a = await runSession(mkOptions(), mkCtx());
+	const cfg = a.rec.config;
+	check(!!cfg, "session 事件缺 config 对象（场景 10）");
+	check(/^[0-9a-f]{12}$/.test(cfg?.fingerprint ?? ""), `fingerprint 不是 12 位 hex：${cfg?.fingerprint}（场景 10）`);
+	// 要素齐全
+	check(cfg?.packageRefs?.length === 2, `packageRefs 应按 source 去重成 2 条：${JSON.stringify(cfg?.packageRefs)}（场景 10）`);
+	check(cfg?.packageRefs?.find((p) => p.source.includes("pi-workflow"))?.skills === 2, "packageRefs 的 skills 计数不对（场景 10）");
+	check(cfg?.tools?.count === 3 && cfg?.tools?.names?.length === 3, `tools 不对：${JSON.stringify(cfg?.tools)}（场景 10）`);
+	check(cfg?.tools?.snippetChars === 35, `snippetChars 应为 11+13+11=35，实际 ${cfg?.tools?.snippetChars}（场景 10）`);
+	check(cfg?.contextFiles?.length === 2, "contextFiles 条数不对（场景 10）");
+	check(cfg?.contextFiles?.[0]?.name === "AGENTS.md", "contextFiles 只应留文件名（场景 10）");
+	check(cfg?.contextFiles?.[0]?.chars === 2951, "contextFiles.chars 不对（场景 10）");
+	check(cfg?.model === "deepseek/deepseek-v4.1-flash", "config.model 不对（场景 10）");
+	check(cfg?.thinkingLevel === "off" && cfg?.mode === "print", "thinkingLevel/mode 不对（场景 10）");
+	check(cfg?.models?.length === 2, "models 应取 scopedModels 的 id（场景 10）");
+	check(typeof cfg?.settings?.chars === "number" && /^[0-9a-f]{64}$/.test(cfg?.settings?.sha256 ?? ""), "settings 摘要不对（场景 10）");
+
+	// 验收 3：不含任何正文（settings 内容 / contextFiles 内容 / system prompt）
+	const raw = a.line;
+	check(!raw.includes(SETTINGS_BODY), "日志里出现 settings.json 的正文（场景 10）");
+	check(!raw.includes(CONTEXT_BODY), "日志里出现 contextFiles 的正文（场景 10）");
+	check(!raw.includes("x".repeat(200)), "日志里出现 contextFiles 的长正文片段（场景 10）");
+	check(!raw.includes("C:\\\\proj"), "contextFiles 记了全路径（只该留文件名）（场景 10）");
+
+	// 验收 4：单行 ≤ 8192，不靠兜底截断
+	check(Buffer.byteLength(a.line, "utf8") <= 8192, `session 行超了：${Buffer.byteLength(a.line, "utf8")}（场景 10）`);
+	check(a.rec.truncated !== true, "config 不该把 session 行推到兜底截断（场景 10）");
+
+	// 验收 1：同一配置连跑两次 → fingerprint 相同
+	const b = await runSession(mkOptions(), mkCtx());
+	check(b.rec.config?.fingerprint === cfg.fingerprint, `同配置两次指纹不同：${cfg.fingerprint} vs ${b.rec.config?.fingerprint}（场景 10）`);
+
+	// 验收 2：改任一项 → fingerprint 必须变
+	const changed = [];
+	// 2a 改 settings.json
+	fs.writeFileSync(settingsFile, JSON.stringify({ theme: "dark", note: SETTINGS_BODY, extra: 1 }), "utf8");
+	{
+		const c = await runSession(mkOptions(), mkCtx());
+		changed.push(["settings.json", c.rec.config?.fingerprint]);
+		check(c.rec.config?.fingerprint !== cfg.fingerprint, "改了 settings.json 指纹没变（场景 10）");
+		fs.writeFileSync(settingsFile, JSON.stringify({ theme: "dark", note: SETTINGS_BODY }), "utf8");
+	}
+	// 2b 改 thinkingLevel
+	{
+		const c = await runSession(mkOptions(), mkCtx({ thinkingLevel: "high" }));
+		changed.push(["thinkingLevel=high", c.rec.config?.fingerprint]);
+		check(c.rec.config?.fingerprint !== cfg.fingerprint, "改了 thinkingLevel 指纹没变（场景 10）");
+	}
+	// 2c 改 mode
+	{
+		const c = await runSession(mkOptions(), mkCtx({ mode: "tui" }));
+		changed.push(["mode=tui", c.rec.config?.fingerprint]);
+		check(c.rec.config?.fingerprint !== cfg.fingerprint, "改了 mode 指纹没变（场景 10）");
+	}
+	// 2d 改工具集
+	{
+		const opt = mkOptions();
+		opt.selectedTools = ["read", "bash"];
+		const c = await runSession(opt, mkCtx());
+		changed.push(["去掉 edit 工具", c.rec.config?.fingerprint]);
+		check(c.rec.config?.fingerprint !== cfg.fingerprint, "改了工具集指纹没变（场景 10）");
+	}
+	// 2e 只改「尺寸」类字段（snippetChars 变了但工具名没变，即改了描述文案长度）→ 指纹不该变：
+	// 指纹只覆盖「配置身份」，尺寸字段会随无关改动漂移，混进来就不可比
+	{
+		const opt = mkOptions();
+		opt.toolSnippets = { read: "read a file with a much longer description", bash: "run a command", edit: "edit a file" };
+		const c = await runSession(opt, mkCtx());
+		check(c.rec.config?.tools?.snippetChars !== cfg.tools.snippetChars, "这个用例前提没满足：snippetChars 应已变化（场景 10）");
+		check(c.rec.config?.fingerprint === cfg.fingerprint, "只改描述长度不该改指纹（指纹只管配置身份）（场景 10）");
+	}
+	// 3a 逗号歧义回归：工具名含逗号时，["a,b","c"] 与 ["a","b","c"] 不得撞指纹
+	// （旧实现 sorted().join(",") 会撞；Windows 路径同样含逗号，包 ref / filePath 同理）
+	{
+		const o1 = mkOptions();
+		o1.selectedTools = ["a,b", "c"];
+		o1.toolSnippets = {};
+		const r1 = await runSession(o1, mkCtx());
+		const o2 = mkOptions();
+		o2.selectedTools = ["a", "b", "c"];
+		o2.toolSnippets = {};
+		const r2 = await runSession(o2, mkCtx());
+		check(
+			r1.rec.config?.fingerprint !== r2.rec.config?.fingerprint,
+			`工具名含逗号时指纹撞车：["a,b","c"] 与 ["a","b","c"] 都是 ${r1.rec.config?.fingerprint}（场景 10）`,
+		);
+		// 顺序无关：同一集合换个顺序 → 指纹相同
+		const o3 = mkOptions();
+		o3.selectedTools = ["c", "a", "b"];
+		o3.toolSnippets = {};
+		const r3 = await runSession(o3, mkCtx());
+		check(
+			r3.rec.config?.fingerprint === r2.rec.config?.fingerprint,
+			`工具集顺序影响了指纹：${r2.rec.config?.fingerprint} vs ${r3.rec.config?.fingerprint}（场景 10）`,
+		);
+	}
+
+	console.log("config 指纹：", cfg.fingerprint, "→", changed.map(([w, f]) => `${w}=${f}`).join(" / "));
+}
+
 // —— 红线：不许改写会话 ——
 {
 	const handlers3 = await loadFresh();

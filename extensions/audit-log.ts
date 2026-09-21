@@ -405,6 +405,105 @@ function write(event: string, ctx: any, fields: Record<string, unknown>): void {
 	}
 }
 
+// —— 阶段 2：配置指纹（改配置到底省没省）——
+
+/** `<agent dir>/settings.json` 的摘要：只留字符数与 sha256，绝不记内容。 */
+function settingsDigest(): { chars: number; sha256: string | null } {
+	try {
+		const agentDir = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
+		const file = path.join(agentDir, "settings.json");
+		if (!fs.existsSync(file)) return { chars: 0, sha256: null };
+		const raw = fs.readFileSync(file, "utf8");
+		return { chars: raw.length, sha256: sha256(raw) };
+	} catch (err) {
+		reportOnce("settings-digest", err);
+		return { chars: 0, sha256: null };
+	}
+}
+
+/** 配置指纹：8 个要素按固定顺序规范化后 JSON 序列化，sha256 取前 12 位。
+ *  要素：packageRefs 的 source / selectedTools / model / scopedModels / thinkingLevel / mode /
+ *        settings 的 sha256 / skills 的 filePath。
+ *  只覆盖「配置身份」，**不含尺寸类字段**（snippetChars、contextFiles 的字符数）——
+ *  那些会随无关改动漂移，混进来指纹就失去可比性。*/
+function configFingerprint(f: {
+	packageSources: string[]; toolNames: string[]; model: string | null; models: string[];
+	thinkingLevel: string | null; mode: string | null; settingsSha: string | null; skillFiles: string[];
+}): string {
+	// 用 JSON.stringify 而非 join 拼接：元素含逗号（Windows 路径合法）时 join 会让
+	// ["a,b"] 与 ["a","b"] 拼出同一串，指纹撞车。JSON 带引号与转义，无歧义。
+	const parts = [
+		f.packageSources.slice().sort(),
+		f.toolNames.slice().sort(),
+		f.model ?? "",
+		f.models,
+		f.thinkingLevel ?? "",
+		f.mode ?? "",
+		f.settingsSha ?? "",
+		f.skillFiles.slice().sort(),
+	];
+	return sha256(JSON.stringify(parts)).slice(0, 12);
+}
+
+/** 阶段 2 的 config 对象：全部只记名称 / 尺寸 / 哈希，不记正文
+ *  （contextFiles 只留文件名与字符数，不留全路径与内容；settings 不留内容）。*/
+function buildConfig(event: any, ctx: any): Record<string, unknown> {
+	const opts = event?.systemPromptOptions ?? {};
+	const rawSkills = Array.isArray(opts.skills) ? opts.skills : [];
+	const refCount = new Map<string, number>();
+	const skillFiles: string[] = [];
+	for (const s of rawSkills) {
+		const src = s?.sourceInfo?.source;
+		if (typeof src === "string" && src) refCount.set(src, (refCount.get(src) ?? 0) + 1);
+		if (typeof s?.filePath === "string") skillFiles.push(s.filePath);
+	}
+	const packageRefs = [...refCount.entries()]
+		.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+		.map(([source, skills]) => ({ source, skills }));
+
+	const toolNames = (Array.isArray(opts.selectedTools) ? opts.selectedTools : []).filter(
+		(t: unknown): t is string => typeof t === "string",
+	);
+	const snippets = opts.toolSnippets && typeof opts.toolSnippets === "object" ? opts.toolSnippets : {};
+	let snippetChars = 0;
+	for (const v of Object.values(snippets)) if (typeof v === "string") snippetChars += v.length;
+
+	const contextFiles = (Array.isArray(opts.contextFiles) ? opts.contextFiles : []).map((f: any) => ({
+		name: typeof f?.path === "string" ? path.basename(f.path) : null,
+		chars: typeof f?.content === "string" ? f.content.length : 0,
+	}));
+
+	const model = ctx?.model && typeof ctx.model.id === "string" ? ctx.model.id : null;
+	const models = (Array.isArray(ctx?.scopedModels) ? ctx.scopedModels : [])
+		.map((m: any) => m?.model?.id)
+		.filter((id: unknown): id is string => typeof id === "string")
+		.sort();
+	const thinkingLevel = typeof ctx?.thinkingLevel === "string" ? ctx.thinkingLevel : null;
+	const mode = typeof ctx?.mode === "string" ? ctx.mode : null;
+	const settings = settingsDigest();
+
+	return {
+		packageRefs,
+		tools: { count: toolNames.length, names: toolNames, snippetChars },
+		contextFiles,
+		model,
+		models,
+		thinkingLevel,
+		mode,
+		settings,
+		fingerprint: configFingerprint({
+			packageSources: [...refCount.keys()],
+			toolNames,
+			model,
+			models,
+			thinkingLevel,
+			mode,
+			settingsSha: settings.sha256,
+			skillFiles,
+		}),
+	};
+}
+
 // —— 扩展本体 ——
 
 export default function (pi: ExtensionAPI): void {
@@ -436,8 +535,10 @@ export default function (pi: ExtensionAPI): void {
 		// 用和 write() 完全相同的组装+定稿流程来量尺寸（finishRecord），不拍脑袋估余量：
 		// 公共字段实测能吃掉 400+ 字节，再加上 truncated 标记和脱敏后的长度变化，
 		// 估余量迟早把 filePath 牺牲掉
+		// 阶段 2：配置指纹。尺寸与 skills 一起量，否则加入 config 后尺寸判断会失准
+		const config = buildConfig(event, ctx);
 		const measure = (skills: unknown[], extra?: Record<string, unknown>, ctx2 = ctx): number =>
-			lineBytes(finishRecord("session", ctx2, { ...base, ...(extra ?? {}), skills }));
+			lineBytes(finishRecord("session", ctx2, { ...base, config, ...(extra ?? {}), skills }));
 		let descCap = SKILL_DESC_CHARS;
 		let skills = buildSkills(descCap);
 		for (const cap of [80, 40, 16, 0]) {
@@ -452,6 +553,7 @@ export default function (pi: ExtensionAPI): void {
 		}
 		write("session", ctx, {
 			...base,
+			config,
 			skills,
 			...(descCap < SKILL_DESC_CHARS ? { descriptionChars: descCap } : {}),
 			...(skills.length < rawSkills.length ? { skillsOmitted: rawSkills.length - skills.length } : {}),

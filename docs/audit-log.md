@@ -37,6 +37,8 @@ pi 自动发现 `agentDir/extensions/` 下的直接 `.ts`/`.js` 文件，不用�
 3. 压到 0 仍装不下 → 按**完整条目**丢弃 skill，记 `skillsOmitted`
 
 实测：本机 16 个 skill → 7835 字节，`descriptionChars: 80`，16/16 条 `filePath` 全部真实存在。
+加 `config`（阶段 2）后同一环境 18 个 skill → 7962 字节，`descriptionChars: 0`：
+描述让位给 config，但 skill 条目与 `filePath` 一条不少（详见 §4.2）。
 
 **尺寸判断必须量“即将落盘的那条记录”**（`commonRecord()`），不能估余量。曾经写成「`base + skills` ≤ 8192 − 400」，
 但公共字段（`ts`/`sessionFile`/`cwd`/`event`…）实测能吃掉 **400+ 字节**，工程编码目录一长 `sessionFile` 就更大。
@@ -68,7 +70,7 @@ pi 自动发现 `agentDir/extensions/` 下的直接 `.ts`/`.js` 文件，不用�
 
 | event | 触发点 | 专属字段 |
 | --- | --- | --- |
-| `session` | `before_agent_start` 首次触发（写一次） | `reason`、`skillCount`、`systemPromptChars`、`systemPromptSha256`、`skills[]`、`descriptionChars?`、`skillsOmitted?` |
+| `session` | `before_agent_start` 首次触发（写一次） | `reason`、`skillCount`、`systemPromptChars`、`systemPromptSha256`、`skills[]`、`config`、`descriptionChars?`、`skillsOmitted?` |
 | `turn_start` | `turn_start` | `turnIndex` |
 | `user_input` | `input` | `chars`、`sha256`、`source`、`promptPreview` |
 | `user_bash` | `user_bash` | `commandPreview`、`excludeFromContext` |
@@ -88,6 +90,45 @@ pi 自动发现 `agentDir/extensions/` 下的直接 `.ts`/`.js` 文件，不用�
 **这是"加载了哪些 skill"的唯一权威来源**——不要从 session 文件反推。
 
 `toolCallId` 是审计日志与 session jsonl 的唯一 join 键。
+
+### 4.1 `config`：配置指纹（阶段 2）
+
+`session.config` 回答「改了配置到底省没省」：同一个 `fingerprint` = 同一套配置，可以直接比 token。
+**全部只记名称 / 尺寸 / 哈希，不记任何正文。**
+
+| 字段 | 内容 | 取数来源 |
+| --- | --- | --- |
+| `packageRefs` | `[{source, skills}]`，按 source 去重计数 | `systemPromptOptions.skills[].sourceInfo.source` |
+| `tools` | `{count, names[], snippetChars}` | `selectedTools` / `toolSnippets` 各描述字符数合计 |
+| `contextFiles` | `[{name, chars}]`，**只留文件名，不留路径与内容** | `contextFiles[].path` 取 basename、`.content` 只量长度 |
+| `model` / `models` | 当前模型 id / `ctx.scopedModels` 的 id 列表 | `ctx.model.id` / `ctx.scopedModels[].model.id` |
+| `thinkingLevel` / `mode` | 如 `off` / `print` | `ctx.thinkingLevel` / `ctx.mode` |
+| `settings` | `{chars, sha256}`，**不记内容** | `<agent dir>/settings.json` |
+| `fingerprint` | 12 位 hex | 下节算法 |
+
+**指纹算法**（代码见 `configFingerprint()`）：把 8 项规范化后 `JSON.stringify`、sha256 取前 12 位——
+`packageRefs 的 source 排序` / `tools.names 排序` / `model` / `models 排序` /
+`thinkingLevel` / `mode` / `settings.sha256` / `skills 的 filePath 排序`。
+
+两个口径要注意：
+- 列表类字段先**排序**再拼接，所以 `--models` 的书写顺序不影响指纹。
+- 用 `JSON.stringify` 而不是 `join(',')`：元素含逗号时（Windows 路径合法）裸拼接会让
+  `["a,b"]` 与 `["a","b"]` 撞出同一指纹；JSON 带引号与转义，无歧义。
+- 指纹**只覆盖「配置身份」**，刻意不含尺寸类字段（`snippetChars`、`contextFiles[].chars`）——
+  那些会随无关改动漂移，混进来指纹就失去可比性。改了工具描述的长度：指纹**不变**（这是有意的）。
+
+### 4.2 session 行的容量取舍（实测）
+
+加 `config` 会挤压 `skills[]` 的字节预算。本机 18 个 skill 的实测（`pi 0.86.1`）：
+
+| 配置 | session 行原始字节 | skills | descriptionChars | 截断 |
+| --- | --- | --- | --- | --- |
+| 加 config 前 | 8172（17 skill） | 17 | 80 | 无 |
+| 加 config 后 | **7962**（18 skill） | 18 | 0 | 无 |
+
+即：**config 是从 skill 描述的预算里抠出来的**——描述压到 0（`descriptionChars: 0`），
+保住了全部 skill 条目与 `filePath`（对账依赖它）。描述本身无消费方（报表不读），
+真需要时用 `filePath` 去 SKILL.md 拿。容量阶梯仍走 §2，config 与 skills 在**同一次 `finishRecord()` 里一起量**。
 
 ## 5. 脱敏
 
