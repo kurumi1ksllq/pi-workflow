@@ -2,3 +2,7 @@ node_modules/
 
 # 给 pi 的本地需求书，不进公开仓库
 docs/audit-log-spec.md
+
+# pi 开发中的扩展文件（本机验证阶段，按 spec 要求不进团队包；要进包时先删掉这两行）
+extensions/audit-log.ts
+scripts/test-audit-extension.mjs

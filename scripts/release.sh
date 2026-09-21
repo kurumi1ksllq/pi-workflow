@@ -48,7 +48,16 @@ for (const f of ['README.md', 'ONBOARDING.md']) {
 "
 
 # 2) 提交
-git add -A
+#    只提交**已跟踪**文件的改动（以及你手动 `git add` 过的新文件）。
+#    不用 `git add -A`：工作区里第三方留下的半成品（比如 pi 开发中的扩展）会被一起提交出去
+#    —— 踩过一次，未 review 的扩展代码进了公开仓库。
+git add -u
+untracked="$(git ls-files --others --exclude-standard)"
+if [ -n "$untracked" ]; then
+  echo "⚠ 工作区有未跟踪文件，本次不提交：" >&2
+  echo "$untracked" | sed 's/^/    /' >&2
+  echo "  要一起发就先 git add 它们，再跑本脚本。" >&2
+fi
 if git diff --cached --quiet; then
   echo "(没有改动需要提交)"
 else

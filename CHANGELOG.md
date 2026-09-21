@@ -1,5 +1,13 @@
 # 变更记录
 
+## v1.7.2
+- **修发版脚本的误提交**：v1.7.1 用的 `git add -A` 把工作区里 pi 正在开发的
+  `extensions/audit-log.ts`（534 行）和 `scripts/test-audit-extension.mjs`（275 行）一起提交推了出去。
+  两份文件已移出仓库并加进 `.gitignore`（本地保留），`release.sh` 改成只 `git add -u`，
+  遇到未跟踪文件列出警告、不提交（要发的新文件先手动 `git add`）
+- 教训：**发版别用 `git add -A`** —— 工作区不等于本次改动，别人的半成品会一起出门；
+  而且 `extensions/` 下的文件 pi 会直接加载，等于给全员装未 review 的代码
+
 ## v1.7.1
 - 团队清单里的 ponytail 改钉**发布 tag** `v4.10.0`（原来钉的是它 main 上那个 release 提交；
   两者内容一致，bin 一样，但 tag 更好读、更好升级）
