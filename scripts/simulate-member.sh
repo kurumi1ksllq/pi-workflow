@@ -87,13 +87,41 @@ try {
 }
 ' "$SB/agent/settings.json"
 echo "--- 扩展自己的配置 ---"
-if [ -f "$SB/agent/extensions/pi-rtk-optimizer/config.json" ]; then
-  echo "  ✓ pi-rtk-optimizer 默认配置已补"
+for name in pi-rtk-optimizer audit-log; do
+	if [ -f "$SB/agent/extensions/$name/config.json" ]; then
+		echo "  ✓ $name 默认配置已补"
+	else
+		echo "  （$name 没补上 —— 扩展配置同步这一步失败了）"
+	fi
+done
+echo "--- 审计扩展是否真的在跑（真机证据，不是配置存在就算）---"
+audit_log="$SB/agent/audit/logs/$(date +%F).jsonl"
+if [ -f "$audit_log" ] && grep -q '"event":"session"' "$audit_log"; then
+	sessions="$(grep -c '"event":"session"' "$audit_log")"
+	tools="$(grep -c '"event":"tool_result"' "$audit_log")"
+	echo "  ✓ 本次启动写出了审计日志：会话 $sessions 个 / 工具结果 $tools 条（$audit_log）"
+	# 一个会话只该有一条 session 事件；两条说明同一份扩展被加载了两次（本地副本 + 包内副本）
+	dup="$(node -e '
+const fs = require("fs");
+const c = new Map();
+for (const l of fs.readFileSync(process.argv[1], "utf8").split("\n")) {
+  if (!l.trim()) continue;
+  let r; try { r = JSON.parse(l); } catch { continue; }
+  if (r.event === "session") c.set(r.sessionId, (c.get(r.sessionId) || 0) + 1);
+}
+console.log([...c].filter(([, n]) => n > 1).map(([k]) => k).join(","));
+' "$audit_log" 2>/dev/null || echo "")"
+	if [ -n "$dup" ]; then
+		echo "  ⚠ 有会话写出多条 session 事件（$dup）—— 扩展被重复加载了（本地副本与包内副本同时生效）"
+	else
+		echo "  ✓ 每个会话只有一条 session 事件（没有重复加载）"
+	fi
 else
-  echo "  （没补上 —— 扩展配置同步这一步失败了）"
+	echo "  （没写出审计日志 —— 审计扩展没被加载或没生效）"
 fi
 
 echo
 echo "判据：① pi list 每项都带安装路径 ② node_modules 里有清单里的包 ③ rtk 能被找到"
-echo "      ④ settings.json 里有 subagents 和 compaction ⑤ 扩展配置已补 ⑥ 模板说明键没泄漏"
+echo "      ④ settings.json 里有 subagents 和 compaction ⑤ 扩展配置已补（rtk + 审计）"
+echo "      ⑥ 模板说明键没泄漏 ⑦ 审计日志真写出来了且没有重复加载"
 echo "清理：rm -rf \"$SB\""
