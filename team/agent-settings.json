@@ -1,0 +1,22 @@
+{
+  "_说明": "团队共享的 pi 全局设置补丁（落到 ~/.pi/agent/settings.json）。扩展只补缺：成员已经自己设过的键一律不动，也不删任何东西。以 _ 开头的键只是给人看的，不会写进设置。放这里的应该是「全员必须一致」的设置项 —— subagents 里的模型名指向团队网关，成员如果不用这个网关，把对应项删掉再发版。",
+  "compaction": {
+    "enabled": true,
+    "reserveTokens": 32768,
+    "keepRecentTokens": 20000
+  },
+  "subagents": {
+    "disableThinking": true,
+    "agentOverrides": {
+      "reviewer": {
+        "model": "z-ai/glm-5.3-flash"
+      },
+      "researcher": {
+        "model": "z-ai/glm-5.3-flash"
+      },
+      "oracle": {
+        "model": "gpt-5.6-sol"
+      }
+    }
+  }
+}

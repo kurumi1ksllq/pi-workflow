@@ -2,12 +2,15 @@
 //
 // 跑法：node scripts/test-extension.mjs
 //
-// 覆盖的四个场景（都是踩过坑才加的规则）：
+// 覆盖的场景（都是踩过坑才加的规则）：
 //   1. 清单里钉版本的包，成员设置里是同一个包但不带版本 → 必须被替换成钉版本那条
 //   2. 清单里有、设置里没有的包 → 追加
 //   3. 别人的私有条目、无关设置项 → 一律不动；重复运行必须幂等
 //   4. 版本标识：设置里钉的 ref 要赢过 clone 里的陈旧 tag
 //      （pi 升级已有 clone 时只 fetch <ref>、不建本地 tag，describe 会给 v1.4.4-8-gXXXX 这种误导值）
+//   5. 团队共享设置（team/agent-settings.json）只补缺：成员自己设过的键一个都不能被覆盖
+//   6. 扩展自己的配置（team/extensions/*.json）只补不覆盖：成员调过的不许被重置
+//   7. 模板里 `_` 开头的说明键不许写进设置
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -19,6 +22,8 @@ const AGENT = path.join(os.tmpdir(), "pi-workflow-ext-test", "agent");
 const settingsFile = path.join(AGENT, "settings.json");
 
 const pkgList = JSON.parse(fs.readFileSync(path.join(repoRoot, "team", "packages.json"), "utf-8")).packages;
+const sharedSettings = JSON.parse(fs.readFileSync(path.join(repoRoot, "team", "agent-settings.json"), "utf-8"));
+const extCfgDir = path.join(repoRoot, "team", "extensions");
 const problems = [];
 const check = (ok, message) => {
 	if (!ok) problems.push(message);
@@ -87,8 +92,63 @@ check(
 	"版本标识没优先用设置里钉的 ref（场景 4：clone 内 tag 陈旧时会报错版本）",
 );
 
+// —— 场景 5 / 6 / 7：共享设置只补缺 + 扩展配置只补不覆盖 ——
+// 重开隔离目录：这次成员手里有"自己调过的"设置和扩展配置
+fs.rmSync(AGENT, { recursive: true, force: true });
+fs.mkdirSync(AGENT, { recursive: true });
+fs.writeFileSync(
+	settingsFile,
+	JSON.stringify(
+		{
+			theme: "light",
+			compaction: { enabled: false },
+			subagents: { agentOverrides: { reviewer: { model: "my-own/reviewer-model" } } },
+		},
+		null,
+		2,
+	),
+	"utf-8",
+);
+const rtkCfgPath = path.join(AGENT, "extensions", "pi-rtk-optimizer", "config.json");
+fs.mkdirSync(path.dirname(rtkCfgPath), { recursive: true });
+fs.writeFileSync(rtkCfgPath, JSON.stringify({ enabled: false }, null, 2), "utf-8");
+
+await load();
+const mine = readSettings();
+
+check(mine.theme === "light", "动了无关设置项（场景 5）");
+check(mine.compaction.enabled === false, "覆盖了成员关掉的 compaction（场景 5：只补缺）");
+check(
+	mine.compaction.reserveTokens === sharedSettings.compaction.reserveTokens &&
+		mine.compaction.keepRecentTokens === sharedSettings.compaction.keepRecentTokens,
+	"compaction 里缺的键没补上（场景 5）",
+);
+check(
+	mine.subagents.agentOverrides.reviewer.model === "my-own/reviewer-model",
+	"覆盖了成员自设的 reviewer 模型（场景 5：只补缺）",
+);
+check(
+	mine.subagents.agentOverrides.oracle?.model === sharedSettings.subagents.agentOverrides.oracle.model,
+	"缺的 agent override 没补上（场景 5：oracle）",
+);
+check(mine.subagents.disableThinking === sharedSettings.subagents.disableThinking, "subagents.disableThinking 没补上（场景 5）");
+check(!Object.keys(mine).some((k) => k.startsWith("_")), "模板里的 `_` 说明键被写进了设置（场景 7）");
+check(
+	JSON.parse(fs.readFileSync(rtkCfgPath, "utf-8")).enabled === false,
+	"覆盖了成员调过的扩展配置（场景 6：只补不覆盖）",
+);
+
+// 成员机器上还没有这个扩展的配置 → 从模板补一份，内容必须与模板逐字节一致
+fs.rmSync(path.dirname(rtkCfgPath), { recursive: true, force: true });
+await load();
+check(
+	fs.readFileSync(rtkCfgPath, "utf-8") === fs.readFileSync(path.join(extCfgDir, "pi-rtk-optimizer.json"), "utf-8"),
+	"扩展配置没按模板补上（场景 6）",
+);
+
 console.log("设置里的 packages：", JSON.stringify(after.packages));
 console.log("注入段版本行：", injected4.systemPrompt.split("\n").find((l) => l.includes("pi-workflow")));
+console.log("共享设置补缺后：", JSON.stringify({ compaction: mine.compaction, subagents: mine.subagents }));
 console.log(problems.length === 0 ? "\n全部通过 ✓" : "\n问题：\n- " + problems.join("\n- "));
 
 fs.rmSync(path.dirname(AGENT), { recursive: true, force: true });

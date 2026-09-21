@@ -34,6 +34,8 @@ const packageRoot = path.resolve(here, "..");
 const rulesFile = path.join(packageRoot, "team", "RULES.md");
 const mcpTemplateFile = path.join(packageRoot, "team", "mcp.template.json");
 const packagesManifestFile = path.join(packageRoot, "team", "packages.json");
+const agentSettingsFile = path.join(packageRoot, "team", "agent-settings.json");
+const extensionConfigsDir = path.join(packageRoot, "team", "extensions");
 const pkgJsonFile = path.join(packageRoot, "package.json");
 
 function readIfExists(file: string): string | undefined {
@@ -119,6 +121,16 @@ function healthCheck(): string[] {
 			JSON.parse(tpl);
 		} catch {
 			problems.push("team/mcp.template.json 不是合法 JSON -> MCP 同步被跳过");
+		}
+	}
+	const settingsTpl = readIfExists(agentSettingsFile);
+	if (!settingsTpl) {
+		problems.push("team/agent-settings.json 不存在 -> 团队共享设置不会同步");
+	} else {
+		try {
+			JSON.parse(settingsTpl);
+		} catch {
+			problems.push("team/agent-settings.json 不是合法 JSON -> 共享设置同步被跳过");
 		}
 	}
 	return problems;
@@ -261,6 +273,105 @@ function syncPackagesManifest(projectDir: string): PkgSync {
 	return changed ? "added" : "none";
 }
 
+type SettingsSync = "merged" | "none" | "error";
+
+/**
+ * 深合并：**只补缺**。成员自己设过的键一律不动，也从不删键。
+ * 数组整体当一个值（合并数组只会制造意外）；以 `_` 开头的键是给人看的说明，不写进设置。
+ */
+function mergeMissing(target: any, patch: any): boolean {
+	let changed = false;
+	for (const [key, value] of Object.entries(patch)) {
+		if (key.startsWith("_")) continue;
+		const current = target[key];
+		if (current === undefined || current === null) {
+			target[key] = value;
+			changed = true;
+			continue;
+		}
+		if (
+			value !== null &&
+			typeof value === "object" &&
+			!Array.isArray(value) &&
+			typeof current === "object" &&
+			!Array.isArray(current)
+		) {
+			changed = mergeMissing(current, value) || changed;
+		}
+	}
+	return changed;
+}
+
+/**
+ * 团队共享设置（team/agent-settings.json）→ 全局 ~/.pi/agent/settings.json。
+ *
+ * 只补缺，理由和 packages 一样：成员可能自己调过 compaction 或给某个 agent 换过模型，
+ * 团队不该把他的手改覆盖掉 —— 覆盖会让人不敢在自己机器上动任何设置。
+ * 需要「全员强制一致」时，改的是团队包的模板，然后发版让所有人的空缺被补上。
+ */
+function syncAgentSettings(): SettingsSync {
+	const tpl = readIfExists(agentSettingsFile);
+	if (!tpl) return "none";
+	let patch: any;
+	try {
+		patch = JSON.parse(tpl);
+	} catch {
+		return "error";
+	}
+	const file = path.join(getAgentDir(), "settings.json");
+	const raw = readIfExists(file);
+	let settings: any = {};
+	if (raw) {
+		try {
+			settings = JSON.parse(raw);
+		} catch {
+			return "error";
+		}
+	}
+	if (!mergeMissing(settings, patch)) return "none";
+	try {
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(file, JSON.stringify(settings, null, 2) + "\n", "utf-8");
+		return "merged";
+	} catch {
+		return "error";
+	}
+}
+
+/**
+ * 扩展自己的配置文件：`team/extensions/<扩展名>.json` → `<agent dir>/extensions/<扩展名>/config.json`。
+ *
+ * 这是 pi-rtk-optimizer 这类「配置不在 settings.json 里、在自己的 config.json 里」的扩展。
+ * 只看目标存不存在，**存在就完全不动** —— 成员调过的配置（比如关掉某个压缩项）不能被重置。
+ */
+function syncExtensionConfigs(): { written: string[]; failed: string[] } {
+	const written: string[] = [];
+	const failed: string[] = [];
+	let entries: string[];
+	try {
+		entries = fs.readdirSync(extensionConfigsDir);
+	} catch {
+		return { written, failed };
+	}
+	for (const entry of entries) {
+		const m = entry.match(/^([^.].*)\.json$/);
+		if (!m) continue;
+		const name = m[1];
+		const target = path.join(getAgentDir(), "extensions", name, "config.json");
+		if (fs.existsSync(target)) continue;
+		const content = readIfExists(path.join(extensionConfigsDir, entry));
+		if (content === undefined) continue;
+		try {
+			fs.mkdirSync(path.dirname(target), { recursive: true });
+			fs.writeFileSync(target, content, "utf-8");
+			written.push(name);
+		} catch {
+			failed.push(name);
+		}
+	}
+	return { written, failed };
+}
+
 type RtkState = "ok" | "installed" | "not-in-path" | "no-bundle" | "error";
 
 const isWin = process.platform === "win32";
@@ -347,6 +458,38 @@ export default function teamBaseline(pi: ExtensionAPI) {
 		pkgResult = "error";
 	}
 
+	// 团队共享设置（只补缺）+ 扩展自己的配置文件（只补不覆盖）
+	let settingsResult: SettingsSync = "none";
+	try {
+		settingsResult = syncAgentSettings();
+		if (settingsResult === "merged") {
+			console.error(
+				"[team-baseline] 已把团队共享设置补进 ~/.pi/agent/settings.json（只补了缺的键，你的手改没动）—— **重启 pi 生效**",
+			);
+		} else if (settingsResult === "error") {
+			console.error(
+				"[team-baseline] 团队共享设置写入失败（settings.json 不是合法 JSON 或没写权限）—— 本次按你原来的设置跑",
+			);
+		}
+	} catch {
+		settingsResult = "error";
+	}
+	let extConfigsWritten: string[] = [];
+	try {
+		const synced = syncExtensionConfigs();
+		extConfigsWritten = synced.written;
+		if (synced.written.length > 0) {
+			console.error(
+				`[team-baseline] 已补上扩展默认配置：${synced.written.join("、")}（已有配置的扩展一律没动）—— **重启 pi 生效**`,
+			);
+		}
+		if (synced.failed.length > 0) {
+			console.error(`[team-baseline] 扩展配置写入失败：${synced.failed.join("、")}`);
+		}
+	} catch {
+		extConfigsWritten = [];
+	}
+
 	// pi-rtk-optimizer 需要的 rtk 二进制：缺了就从包里补一份
 	let rtkResult: RtkState = "ok";
 	try {
@@ -398,6 +541,8 @@ ${rules.trim()}
 					`mcpTemplate exists=${fs.existsSync(mcpTemplateFile)}\n` +
 					`mcpSync=${mcpResult}\n` +
 					`pkgSync=${pkgResult}\n` +
+					`settingsSync=${settingsResult}\n` +
+					`extConfigsSync=${extConfigsWritten.length ? extConfigsWritten.join(",") : "(无)"}\n` +
 					`rtkSync=${rtkResult}\n` +
 					`problems=${problems.length ? problems.join(" | ") : "(无)"}\n` +
 					`cwd=${projectDir}\n\n`;
@@ -428,6 +573,9 @@ ${rules.trim()}
 					`包位置：${packageRoot}`,
 					`团队规范：${ok(fs.existsSync(rulesFile))}`,
 					`MCP 模板：${ok(fs.existsSync(mcpTemplateFile))}`,
+					`共享设置模板：${ok(fs.existsSync(agentSettingsFile))}`,
+					`扩展配置模板：${ok(fs.existsSync(extensionConfigsDir))}`,
+					`本次启动同步：清单 ${pkgResult} / 共享设置 ${settingsResult} / 扩展配置 ${extConfigsWritten.length ? extConfigsWritten.join("、") : "无"}`,
 					`本项目 .mcp.json：${fs.existsSync(projectMcp) ? "存在" : "不存在"}`,
 					`自检：${problems.length === 0 ? "✓ 全部通过" : "✗ " + problems.join("；")}`,
 					"",

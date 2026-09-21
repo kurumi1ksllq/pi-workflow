@@ -10,18 +10,20 @@
 
 ## 当前内容：team-baseline.ts
 
-这个扩展是为了补 pi 的四个边界，不是随手加的：
+这个扩展是为了补 pi 的六个边界，不是随手加的：
 
 | 边界 | pi 原生行为 | 这个扩展做什么 |
 | --- | --- | --- |
 | 包内的 `AGENTS.md` | 不加载（只扫 cwd 祖先链 + `~/.pi/agent/`） | 把 `team/RULES.md` 追加进系统提示 |
 | MCP 配置 | 没有"从包里读"的入口 | 项目缺 `.mcp.json` 时，从 `team/mcp.template.json` 补一份 |
 | 第三方包清单 | 包里的设置文件不会被读 | 把 `team/packages.json` 里的包补进**全局** `~/.pi/agent/settings.json` |
+| 共享的全局设置 | 同上，包里的设置不会被读 | 把 `team/agent-settings.json` **只补缺**地并进全局设置 |
+| 扩展自己的配置 | 各扩展只读自己固定位置的 `config.json` | 把 `team/extensions/<扩展名>.json` 补到那个位置（**存在就不动**） |
 | 包的外部依赖 | `pi install` 只装 npm 包本身，命令行不进 PATH | 缺 `rtk` 时从包内 `tools/` 补到 npm 全局 bin |
 
 关键技巧：扩展用 `import.meta.url` 定位自己，就能反推出团队包根目录，从而读到包里任何文件。
 
-在 pi 里敲 `/team-baseline` 可以看到当前基线来源与同步状态。
+在 pi 里敲 `/team-baseline` 可以看到当前基线来源、同步状态、以及本次启动各补了什么。
 
 ## 重要：RULES.md 不是 pi 认识的文件
 
@@ -58,6 +60,7 @@ PI_BASELINE_DEBUG=1 pi            # 真机：跑完看 .pi/team-baseline.debug.t
 
 `PI_BASELINE_DEBUG=1` 跑完看 `.pi/team-baseline.debug.txt`，里面是**拼接之后的完整系统提示**：
 开头是 pi 的原生提示，往下翻能看到「## 团队基线规范」那一段 —— 那就是注进去的。
+文件开头还有各条同步链路的本次启动结果（`pkgSync` / `settingsSync` / `extConfigsSync` / `rtkSync`）。
 
 ## 团队要一起用的第三方包：team/packages.json
 
@@ -75,6 +78,9 @@ PI_BASELINE_DEBUG=1 pi            # 真机：跑完看 .pi/team-baseline.debug.t
 **一律写死版本号。** 不带版本的条目（`npm:foo`）在 pi 眼里不是 pinned —— 启动会弹
 「Package Updates Available」，成员各点一下就升到不同版本，团队就不是同一套了。
 带上精确版本后 pi 启动时比对已装版本、不符就自动装齐，提示也不会再出现。
+
+git 源同样要钉：是 tag 就写 `@v1.2.3`，只有主干可跟就写完整 commit
+（`git:github.com/org/repo@<40 位 commit>`）。写分支名等于没钉 —— 分支会动。
 
 扩展在启动时做三件事（**只补不删、不动已有的、重复调用安全**）：
 
@@ -95,6 +101,48 @@ PI_BASELINE_DEBUG=1 pi            # 真机：跑完看 .pi/team-baseline.debug.t
   放进去等于替所有人做决定
 - 原生不支持的工具要一起装，得先解决"成员怎么装"—— 见下面 rtk 那节
 - 清单里的包**一律钉版本**；成员手里是旧的不带版本条目时，扩展会替换掉它（这条改动是 v1.6.4 加的）
+
+## 共享的全局设置：team/agent-settings.json
+
+`subagents` 的模型路由、`compaction` 参数这类东西住在 `~/.pi/agent/settings.json` 里，
+包里的设置文件 pi 不会读 —— 所以由扩展**只补缺**地并进去：
+
+```json
+{
+  "_说明": "给人看的，不会写进设置（以 _ 开头的键一律跳过）",
+  "compaction": { "enabled": true, "reserveTokens": 32768, "keepRecentTokens": 20000 },
+  "subagents": {
+    "disableThinking": true,
+    "agentOverrides": { "oracle": { "model": "gpt-5.6-sol" } }
+  }
+}
+```
+
+规则：
+
+- **只补缺，从不覆盖**：成员自己已经设过的键一个都不动，也从不删键。合并是深合并（对象递归），
+  但**数组整体当一个值** —— 合并数组只会制造意外
+- **`_` 开头的键是说明**，不写进设置。模板自己解释自己，别把文档另放一份
+- 想"全员强制一致"也别改成覆盖 —— 改模板然后发版，让所有人的**空缺**被补上。
+  覆盖的代价是没人再敢在自己机器上动设置
+- 写的是**全局**设置。项目级的 `.pi/settings.json` 不在这条链路上（那是项目自己负责的事，
+  模板见 `templates/project-settings.json`）
+- ⚠️ **不许放凭据**：模型名可以，key / token / 密码不行（仓库是公开的）
+
+## 扩展自己的配置：team/extensions/
+
+有些扩展的配置不在 `settings.json` 里，而在自己的文件里 —— 比如 `pi-rtk-optimizer` 读的是
+`<agent dir>/extensions/pi-rtk-optimizer/config.json`。约定：
+
+```
+team/extensions/<扩展名>.json   →   <agent dir>/extensions/<扩展名>/config.json
+```
+
+（`pi-rtk-optimizer` 的配置位置来自它源码里的 `CONFIG_DIR = join(getAgentDir(), "extensions", EXTENSION_NAME)`；
+换别的扩展前先确认它到底读哪个路径，别照抄这个约定。）
+
+规则同样是**只补不覆盖**：目标文件已存在就完全不动 —— 成员调过的配置（比如关掉某个压缩项）
+不能被重置。删掉自己那份配置的人，下次启动会拿到团队默认值。
 
 ## 内置二进制：tools/ + 扩展补装（rtk 的例子）
 
@@ -135,7 +183,7 @@ PI_BASELINE_DEBUG=1 pi            # 真机：跑完看 .pi/team-baseline.debug.t
 
 | 层 | 覆盖什么 | 机制 |
 | --- | --- | --- |
-| 1. 扩展内自检 | 规范缺失、MCP 模板非法 | 启动时写 **stderr**（print / json / rpc 都可见），交互模式额外 notify |
+| 1. 扩展内自检 | 规范缺失、MCP 模板非法、共享设置模板缺失/非法 | 启动时写 **stderr**（print / json / rpc 都可见），交互模式额外 notify |
 | 2. 注入段带版本号 | 不知道自己跑的是哪版 | 注入文本里有 `（来源：pi-workflow vX.Y.Z）`，问模型就能问出来 |
 | 3. 项目侧哨兵 | **扩展完全没加载**（项目未信任等） | 各项目仓库根放 `templates/project-AGENTS.md` —— pi 原生加载它，扩展挂了它会提醒模型主动报告 |
 
@@ -162,8 +210,9 @@ PI_BASELINE_DEBUG=1 pi            # 真机：跑完看 .pi/team-baseline.debug.t
 结果 print 模式下静默不生效 —— 这个坑踩过一次，别改回去。
 `session_start` 只用来做交互模式下的额外提示。
 
-包清单和 rtk 的同步是**在扩展加载时**（顶层代码）跑的，比 `before_agent_start` 更早 ——
-必须这么早，晚了就赶不上 pi 检查缺哪些包。
+包清单、共享设置、扩展配置、rtk 的同步都是**在扩展加载时**（顶层代码）跑的，
+比 `before_agent_start` 更早 —— 包清单必须这么早，晚了就赶不上 pi 检查缺哪些包。
+设置类同步同样放这儿，代价是**本次启动不生效、下一次才读到**，所以提示语里都写了「重启 pi 生效」。
 
 ## 什么时候会静默失效
 
@@ -172,6 +221,7 @@ PI_BASELINE_DEBUG=1 pi            # 真机：跑完看 .pi/team-baseline.debug.t
 | 项目没被信任 | 项目资源不加载、扩展不跑，什么都不发生，**没有提示**（全局装的包不受影响） |
 | 扩展文件本身加载失败 | 同上 |
 | `team/RULES.md` 被删或改名 | 扩展会 notify 一条提示，规范没注入 |
+| 成员的 `settings.json` 不是合法 JSON | 共享设置与包清单都不写（返回 error 并打 stderr），成员按自己的设置继续跑 |
 
 前两种没有提示 —— 改完包之后先跑 `bash scripts/simulate-member.sh <版本>`，
 通过再通知团队。
@@ -181,6 +231,7 @@ PI_BASELINE_DEBUG=1 pi            # 真机：跑完看 .pi/team-baseline.debug.t
 - 改了 `team-baseline.ts` 就是改全团队的行为，**必须 review**
 - 扩展跑在成员机器上，别在这里放网络请求、密钥读取、文件删除
 - 写的 `.mcp.json` 只在不存在时补，**绝不覆盖**成员已有的配置 —— 这条不能改
+- 共享设置只补缺、扩展配置只补不覆盖 —— 这两条同样是"只补不覆盖"家族，别改成覆盖
 - 往用户机器写可执行文件只有一处（补 rtk），写的必须是包里自带的那份，别改成去网上下
 
 ## team/ 目录
@@ -192,3 +243,5 @@ PI_BASELINE_DEBUG=1 pi            # 真机：跑完看 .pi/team-baseline.debug.t
 | `team/RULES.md` | 团队规范正文，注入每次会话的系统提示。**改这里 = 改全团队** |
 | `team/mcp.template.json` | MCP 基线。`mcpServers` 为空时扩展不动作；填了才会往项目里补 |
 | `team/packages.json` | 第三方 pi 包清单，补进全局设置。唯一入口，别在项目里手写包 |
+| `team/agent-settings.json` | 共享的全局设置补丁（`subagents` / `compaction` 等），只补缺地并进全局设置。不许放凭据 |
+| `team/extensions/<扩展名>.json` | 各扩展自己的默认配置，补到 `<agent dir>/extensions/<扩展名>/config.json`。已存在则不动 |

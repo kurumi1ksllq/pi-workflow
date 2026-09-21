@@ -1,7 +1,14 @@
 {
-  "_说明": "团队要一起用的第三方 pi 包写在这里，扩展会自动把它们补进每个人的全局设置 ~/.pi/agent/settings.json（团队全员全局装，不绑项目）。留空则什么都不做，只补不删。一律写死版本号（npm:foo@1.2.3）—— 不写版本 pi 认为它不是 pinned，启动会弹「Package Updates Available」，各人升到不同版本就不是同一套了；写了版本 pi 启动时发现版本不符会自动装齐。升级第三方包 = 改这里的版本号 → 发版。加了需要独立二进制的包，把二进制放 tools/ 并在扩展里补装逻辑。",
+  "_说明": "团队要一起用的第三方 pi 包写在这里，扩展会自动把它们补进每个人的全局设置 ~/.pi/agent/settings.json（团队全员全局装，不绑项目）。留空则什么都不做，只补不删。一律写死版本号（npm:foo@1.2.3 / git:host/org/repo@<tag 或 commit>）—— 不写版本 pi 认为它不是 pinned，启动会弹「Package Updates Available」，各人升到不同版本就不是同一套了；写了版本 pi 启动时发现版本不符会自动装齐。升级第三方包 = 改这里的版本号 → 发版。加了需要独立二进制的包，把二进制放 tools/ 并在扩展里补装逻辑（rtk 就是这样）。",
   "packages": [
     "npm:pi-context-view@0.6.0",
-    "npm:pi-rtk-optimizer@0.9.0"
+    "npm:pi-rtk-optimizer@0.9.0",
+    "npm:@juicesharp/rpiv-ask-user-question@2.10.1",
+    "npm:@juicesharp/rpiv-todo@2.10.1",
+    "npm:@ocodista/pi-token-bloat@0.1.6",
+    "npm:pi-simplify@0.2.3",
+    "npm:pi-lens@4.2.1",
+    "npm:pi-subagents@0.70.0",
+    "git:github.com/DietrichGebert/ponytail@e3ba2aa6f1e6f0bc4d69eb09c9f0d0a93af56156"
   ]
 }

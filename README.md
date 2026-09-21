@@ -1,6 +1,7 @@
 # pi-workflow
 
-团队 pi 基线。全局装一次，所有人拿到同一套 skills、prompts、extensions、团队规范。
+团队 pi 基线。全局装一次，所有人拿到同一套 skills、prompts、extensions、团队规范，
+外加同一批第三方扩展、同一套扩展设置。
 
 ## 成员怎么用（两步）
 
@@ -68,8 +69,9 @@ git:github.com/<org>/pi-workflow@v1.6.7
 脚本做四件事：① 把 `package.json` 的 version **和 README/ONBOARDING 里的版本号**一起对齐 →
 ② 提交 → ③ 打 tag → ④ 推 main 和 tag。
 
-- 版本标识以 **git tag** 为准 —— 扩展注入的版本号读的是 `git describe`，不读 `package.json`
-  （踩过：tag 里包的 `package.json` version 忘了改，上下文里写的版本和实际装的对不上）
+- 版本标识以 **git tag** 为准 —— 扩展注入的版本号优先读你设置里钉的那个 ref，
+  `git describe` 只做备选（踩过两次：一次是 tag 里包的 `package.json` version 忘了改；
+  一次是 pi 升级已有 clone 时只 `git fetch <ref>`、不建本地 tag，describe 会报成 v1.4.4-8-gXXXX）
 - 文档里的安装命令由脚本统一改写（`pi-workflow@vX.Y.Z` 和 `simulate-member.sh vX.Y.Z`），所以**别再手工改版本号**，照抄当前版本就行
 - 发版后通知成员升级（见下一节），并**先在干净目录验一遍**（见「推完之后怎么验证」）
 
@@ -93,7 +95,7 @@ pi install git:github.com/kurumi1ksllq/pi-workflow@<新版本>
   只会让你不知道队友此刻跑的是哪一版
 - 别用 `pi update --all` 更新扩展 —— 它会顺带升级 pi 本身
 - **确认自己更新成功**：在 pi 里问「团队基线是哪一版」，或敲 `/team-baseline`。
-  注入段里带版本号（读的是 git tag，不会和实际版本对不上）
+  注入段里带版本号（读的是你设置里钉的 ref，不会和实际版本对不上）
 
 ## 推完之后怎么验证
 
@@ -103,8 +105,10 @@ pi install git:github.com/kurumi1ksllq/pi-workflow@<新版本>
 node scripts/test-extension.mjs
 ```
 
-它离线跑扩展的逻辑，覆盖四条踩过坑的规则：钉版本替换旧的不带版本条目、缺的包追加、
-别人的私有条目和无关设置项不动 + 幂等、版本标识优先用设置里钉的 ref。挂了会 exit 1。
+它离线跑扩展的全部同步逻辑，覆盖七条踩过坑的规则：钉版本替换不带版本的旧条目、缺的包追加、
+别人的私有条目与无关设置项不动 + 幂等、版本标识优先用设置里钉的 ref、
+共享设置只补缺（成员自己设过的键不被覆盖）、扩展配置只补不覆盖、
+模板里 `_` 开头的说明键不写进设置。挂了会 exit 1。
 
 **发版前再跑一次全链路（要网络，约一两分钟）** —— 别等成员踩了才发现问题。
 一行命令，在隔离目录里模拟一个**全新成员**：
@@ -115,10 +119,12 @@ bash scripts/simulate-member.sh v1.6.7
 
 它做的事：造一个独立的 agent 配置目录（不碰你本机的 `~/.pi/agent`）+
 从 PATH 里摘掉 rtk（模拟没装过 rtk 的机器），然后走 `install` → 第一次启动 → 第二次启动 →
-`pi list`，把包装到哪、rtk 落在哪都打出来。
+`pi list`，把包装到哪、rtk 落在哪、共享设置有没有写进去都打出来。
 
-**判据**：`User packages` 三项都**带安装路径**（`pi-workflow`、`pi-context-view`、`pi-rtk-optimizer`）、
-隔离目录的 `npm/node_modules` 里有那两个包、rtk 能被 `command -v` 找到。
+**判据**：`User packages` 里每一项都**带安装路径**（`pi-workflow` + 清单里的那些包）、
+隔离目录的 `npm/node_modules` 里确实有它们、rtk 能被 `command -v` 找到、
+隔离目录的 `settings.json` 里出现 `subagents` 与 `compaction`、
+`extensions/pi-rtk-optimizer/config.json` 存在。
 只看到包名没有路径 = 还在设置里没装上 —— 少了第二次启动。
 
 手工等价流程：
@@ -127,11 +133,11 @@ bash scripts/simulate-member.sh v1.6.7
 SB='C:\Users\<你>\pi-check-agent'   # 隔离的 agent 目录，Windows 路径写法
 PI_CODING_AGENT_DIR="$SB" pi install git:github.com/kurumi1ksllq/pi-workflow@v1.6.7
 # 隔离目录不带凭据，启动前把 auth.json / models.json 拷进去
-PI_CODING_AGENT_DIR="$SB" pi -p ok    # 第一次：扩展写清单 + 补 rtk
-PI_CODING_AGENT_DIR="$SB" pi list     # 应看到三项
+PI_CODING_AGENT_DIR="$SB" pi -p ok    # 第一次：扩展写清单 + 补 rtk + 补共享设置
+PI_CODING_AGENT_DIR="$SB" pi list     # 应看到清单里的包都带路径
 ```
 
-`pi list` 里能看到这些包，就说明远程源、ref、包结构、扩展三条链路都对。验证完删掉那个目录即可。
+`pi list` 里能看到这些包，就说明远程源、ref、包结构、扩展几条链路都对。验证完删掉那个目录即可。
 
 ## 加第三方包之前先确认一件事
 
@@ -155,20 +161,26 @@ PI_CODING_AGENT_DIR="$SB" pi list     # 应看到三项
 | 纯 npm 包，自带依赖 | ✅ 可以 |
 | 需要额外装 CLI / 二进制 | ⚠️ 先想清楚成员怎么装；装不上就别加 |
 
-## 两个清单，分工别搞混
+## 三个清单，分工别搞混
 
 | 要同步什么 | 写哪 | 谁来落地 |
 | --- | --- | --- |
-| **第三方 pi 包**（要团队一起装的扩展） | `team/packages.json`，**一律写死版本号**（`npm:foo@1.2.3`） | 扩展补进**全局** `~/.pi/agent/settings.json`；旧的同名条目（不带版本）会被替换成钉版本的 |
+| **第三方 pi 包**（要团队一起装的扩展） | `team/packages.json`，**一律写死版本号**（`npm:foo@1.2.3` / `git:host/org/repo@<tag 或 commit>`） | 扩展补进**全局** `~/.pi/agent/settings.json`；旧的同名条目（不带版本）会被替换成钉版本的 |
+| **共享的全局设置**（`subagents` 模型路由、`compaction` 等） | `team/agent-settings.json` | 扩展**只补缺**地并进全局 `settings.json`：成员自己设过的键一个都不动 |
+| **扩展自己的配置文件**（`pi-rtk-optimizer` 这类把配置放自己目录的） | `team/extensions/<扩展名>.json` | 扩展补到 `<agent dir>/extensions/<扩展名>/config.json`，**目标存在就完全不动** |
 | **项目级设置**（compaction 等） | 各项目 `.pi/settings.json`，可从 `templates/project-settings.json` 抄 | 项目负责人手工放一次 |
 | 团队自己的 skill / prompt / 扩展 / 规范 | 包内对应目录 | 升级团队包 |
 
-团队是**全员全局装**，所以第三方包清单落到全局设置 —— 不依赖任何项目仓库。
+团队是**全员全局装**，所以第三方包清单和共享设置都落到全局 —— 不依赖任何项目仓库。
 
 **为什么必须写死版本号**：不带版本的条目在 pi 眼里不是 pinned，启动时会弹
 「Package Updates Available」，各人点一下就升到不同版本，团队就不是同一套了。
 写了版本之后 pi 启动会比对已装版本并自动装齐，提示也不再出现。
 升级第三方包 = 改 `team/packages.json` 里的版本号 → 发版。
+
+**共享设置为什么是"只补缺"**：成员可能自己关掉 compaction、给某个 agent 换过模型 ——
+覆盖等于让人不敢在自己机器上动任何设置。要"全员强制一致"时也别去覆盖，
+改模板 + 发版，让所有人的**空缺**被补上。
 
 **别在两处写包** —— `team/packages.json` 是唯一入口。项目 `.pi/settings.json` 里手写的包不会被它覆盖，
 但重复了容易搞不清谁负责。
@@ -179,8 +191,8 @@ PI_CODING_AGENT_DIR="$SB" pi list     # 应看到三项
 | --- | --- |
 | `skills/` | 按需加载的能力包。`00-core/` 全员共享，其余按角色分目录 |
 | `prompts/` | 斜杠命令，`review.md` → `/review` |
-| `extensions/` | `team-baseline.ts` —— 引导扩展：注入规范、补 MCP 基线、同步包清单、补 rtk |
-| `team/` | 扩展的数据源：`RULES.md`（规范）+ `mcp.template.json`（MCP 基线）+ `packages.json`（第三方包清单） |
+| `extensions/` | `team-baseline.ts` —— 引导扩展：注入规范、补 MCP 基线、同步包清单、补共享设置、补扩展配置、补 rtk |
+| `team/` | 扩展的数据源：`RULES.md`（规范）+ `mcp.template.json`（MCP 基线）+ `packages.json`（第三方包清单）+ `agent-settings.json`（共享设置补丁）+ `extensions/`（各扩展的默认配置） |
 | `tools/` | `rtk.exe`，`pi-rtk-optimizer` 需要的二进制，随包分发 |
 | `templates/` | 项目级配置模板 `project-settings.json`、项目侧哨兵 `project-AGENTS.md` |
 | `scripts/` | `release.sh`（发版）、`simulate-member.sh`（从零装验证）、`test-extension.mjs`（扩展逻辑离线测） |
@@ -190,19 +202,25 @@ PI_CODING_AGENT_DIR="$SB" pi list     # 应看到三项
 
 ## 扩展做了什么（成员不用管，但该知道）
 
-`team-baseline` 扩展在每次会话做四件事：
+`team-baseline` 扩展在每次会话做六件事：
 
 1. **把 `team/RULES.md` 注入系统提示** —— pi 原生不加载包内的 AGENTS.md，这是绕过办法
 2. **项目缺 `.mcp.json` 时从包里补一份** —— 绝不覆盖已有的；只在有 `.pi/` 的目录里动手
 3. **把 `team/packages.json` 里的包补进全局设置** —— 只补不删、幂等；补了会提示重启
-4. **缺 rtk 时从 `tools/` 补一份到 npm 全局 bin** —— 补完用 `where` 验一次
+4. **把 `team/agent-settings.json` 只补缺地并进全局设置** —— 成员自己设过的键不动
+5. **把 `team/extensions/<扩展名>.json` 补到扩展自己的配置位置** —— 目标已存在就完全不动
+6. **缺 rtk 时从 `tools/` 补一份到 npm 全局 bin** —— 补完用 `where` 验一次
 
-所以改团队规范 = 改 `team/RULES.md` 然后发新版；改 MCP 基线 = 填 `team/mcp.template.json`。
+所以改团队规范 = 改 `team/RULES.md` 然后发新版；改 MCP 基线 = 填 `team/mcp.template.json`；
+改全员共享设置 = 改 `team/agent-settings.json`。
 
-在 pi 里敲 `/team-baseline` 可以看到当前基线来自哪个版本、哪些生效了。
+在 pi 里敲 `/team-baseline` 可以看到当前基线来自哪个版本、哪些生效了、
+本次启动各自补了什么。
 
 ## 边界
 
 - 这里只放**团队共识**。个人试验装在自己全局（`~/.pi/agent/settings.json`）或用 `pi -e` 临时跑，验证过再迁进来
 - 项目专属的约定不写这，写各项目仓库根的 `AGENTS.md` —— pi 启动时自动拼接加载
+- **凭据一律不进这个仓库**（公开仓库）：`team/agent-settings.json` 里只能出现模型名，
+  不能出现 key、token、网关的账号密码 —— 那些是各人自己配的
 - 别手工编辑 `~/.pi/agent/settings.json` 里的包源，统一用 `pi install`（不带 `-l`），避免路径和 ref 写法不一致

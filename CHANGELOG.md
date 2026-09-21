@@ -1,5 +1,20 @@
 # 变更记录
 
+## v1.7.0
+- 团队包现在同步**三类东西**，不再只有第三方包清单：
+  - **扩展清单**（`team/packages.json`）：补齐到 8 个第三方包 + ponytail，全部钉版本/commit
+  - **共享设置**（`team/agent-settings.json`）：`subagents` 的模型路由（reviewer / researcher / oracle）
+    与 `compaction` 参数，由扩展**只补缺**地并进全局 `settings.json` —— 成员自己设过的键一个都不动
+  - **扩展自己的配置**（`team/extensions/<扩展名>.json`）：补到 `<agent dir>/extensions/<扩展名>/config.json`，
+    目标已存在就完全不动（`pi-rtk-optimizer` 那份默认配置随包分发）
+- 团队规范补两节：**语言**（一律中文回答）与**子代理自动委派**（scout / reviewer / researcher / oracle 的触发条件）
+- 离线测扩到七个场景：新增「共享设置只补缺」「扩展配置只补不覆盖」「模板 `_` 说明键不泄漏」
+- `simulate-member.sh` 判据改准（改查 list 路径、settings 里的 subagents/compaction、扩展配置落点），
+  并支持传分支名 —— 发版前可以先验 `main`
+
+## v1.6.7
+- 文档：发版流程那段的版本号说明改准（版本标识优先读设置里钉的 ref，不是 `git describe`）
+
 ## v1.6.6
 - 加 `scripts/test-extension.mjs`：离线测扩展逻辑（钉版本替换、追加、不动私有条目 + 幂等、
   版本标识优先设置里的 ref），不用启动 pi / 不用 provider / 不碰本机 `~/.pi/agent`

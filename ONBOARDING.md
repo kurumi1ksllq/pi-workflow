@@ -40,10 +40,12 @@ pi install git:github.com/kurumi1ksllq/pi-workflow@v1.6.7
 pi
 ```
 
-你会看到一行提示：
+你会看到几行提示，长这样：
 
 ```
 [team-baseline] 已把团队清单里的扩展写进配置 —— 请退出再启动一次 pi，它们会被装上
+[team-baseline] 已把团队共享设置补进 ~/.pi/agent/settings.json（只补了缺的键，你的手改没动）—— **重启 pi 生效**
+[team-baseline] 已补上扩展默认配置：pi-rtk-optimizer（已有配置的扩展一律没动）—— **重启 pi 生效**
 ```
 
 **按提示做：退出，再启动一次。** 第二次启动时清单里的扩展才会真正装上
@@ -77,9 +79,9 @@ pi
 其他确认方式：
 
 - 在 pi 里问「团队基线是哪一版」
-- 敲 `/team-baseline` 看自检报告（只在交互模式有输出）
+- 敲 `/team-baseline` 看自检报告（只在交互模式有输出）：清单同步、共享设置、扩展配置各补了什么都会列出来
 - `Ctrl+O` 展开完整启动信息
-- `pi list` 的 **User packages** 里应有三项：`pi-workflow@v1.6.7`、`pi-context-view`、`pi-rtk-optimizer`
+- `pi list` 的 **User packages** 里应含 `pi-workflow@v1.6.7` 与清单里的那些包，且每项都带安装路径
 
 **没生效就按顺序查**：第 2 步的凭据配了吗 → `pi list` 里有 `pi-workflow@v1.6.7` 吗
 
@@ -91,8 +93,21 @@ pi
 | 4 个 skill | pi 自己判断该用时加载 |
 | `/review` | 敲它审查当前 diff |
 | 团队统一装的扩展 | 启动时自动补进你的全局设置，重启后生效 |
+| 共享的扩展设置 | `subagents` 模型路由、`compaction` 这些团队一致的设置，扩展**只补缺**地并进你的全局设置 —— 你设过的键不会被覆盖 |
+| 扩展默认配置 | 像 `pi-rtk-optimizer` 这种把配置放自己目录的扩展，首次启动时从包里补一份默认配置；你调过之后就不动 |
 | rtk 命令压缩 | 同上，扩展顺手把缺的 `rtk` 二进制补到 PATH 里的目录 |
 | MCP 基线 | 在已接入基线的项目里自动补 `.mcp.json` |
+
+## 从 v1.6.x 升到 v1.7.x
+
+这一版起，基线还会往你的全局设置里补**团队共享设置**（`subagents` / `compaction`）和
+**扩展默认配置**。都是"只补缺"：你已经设过的键、你调过的扩展配置，一律不动。
+
+```bash
+pi install git:github.com/kurumi1ksllq/pi-workflow@v1.6.7   # 1. 换版本
+pi                                                           # 2. 启动：提示补了什么
+pi                                                           # 3. 再启动一次：新清单里的包装上
+```
 
 ## 从 v1.5.x 升到 v1.6.x
 
@@ -143,9 +158,13 @@ pi install git:github.com/kurumi1ksllq/pi-workflow@<新版本>
 | 私人 skill / 扩展 | 直接 `pi install npm:xxx`（全局，只有你自己有） |
 | 临时试一个包 | `pi -e npm:xxx` |
 | 项目专属约定 | 项目仓库根的 `AGENTS.md` |
+| 调某个扩展的配置 | 它自己的配置文件，比如 `~/.pi/agent/extensions/pi-rtk-optimizer/config.json` —— 调过之后团队更新不会再动它 |
 
 ⚠️ **想让全团队都用某个扩展，别自己装了就算** —— 告诉维护者，
 让他写进团队清单（`team/packages.json`），这样所有人都会自动补上。
+
+⚠️ **想让全团队统一某条设置**（模型路由、压缩参数等）—— 也告诉维护者，
+写进 `team/agent-settings.json`，而不是让每个人都手动改一遍。
 
 ---
 
