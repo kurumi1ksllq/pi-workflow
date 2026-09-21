@@ -23,11 +23,6 @@ if [ -z "$V" ]; then
   echo "用法: bash scripts/simulate-member.sh v1.6.2（也可传分支名，如 main）" >&2
   exit 1
 fi
-case "$V" in
-  v*) ;;
-  *) echo "ref 传 tag（v1.6.2）或分支名（main）" >&2; exit 1 ;;
-esac
-
 cd "$(dirname "$0")/.."
 REPO_SRC="git:github.com/kurumi1ksllq/pi-workflow@$V"
 
