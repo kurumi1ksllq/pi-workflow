@@ -68,7 +68,7 @@ ls -d "$SB/agent/git" "$SB/agent/npm/node_modules" 2>/dev/null | sed 's|^|  |'
 ls "$SB/agent/npm/node_modules" 2>/dev/null | sed 's|^|  ├─ |'
 
 echo
-echo "=== 6/6 各条同步链路的落点 ==="
+echo "=== 6/7 各条同步链路的落点 ==="
 echo "--- rtk ---"
 command -v rtk || echo "  （找不到 rtk —— 这一步失败了）"
 echo "--- settings.json（共享设置）---"
@@ -121,7 +121,38 @@ else
 fi
 
 echo
+echo "=== 7/7 自动更新（跟远端最新 tag）==="
+CLONE="$SB/agent/git/github.com/kurumi1ksllq/pi-workflow"
+STATE="$SB/agent/extensions/team-baseline/update-state.json"
+if [ -d "$CLONE/.git" ]; then
+	case "$V" in
+	v[0-9]*)
+		git -C "$CLONE" reset --hard -q HEAD~1
+		echo "  先把 clone 退回一格（模拟成员落后）：$(git -C "$CLONE" log --oneline -1)"
+		rm -f "$STATE" # 清掉 TTL 状态，强制本轮真去查远端
+		(cd "$SB/proj" && PI_BASELINE_UPDATE_TTL_HOURS=0 pi -p "ok" 2>&1 | grep -a "team-baseline" || echo "  （没有 team-baseline 输出 —— 自动更新没跑起来）")
+		want="$(git -C "$CLONE" ls-remote origin "refs/tags/$V" 2>/dev/null | awk '{print $1}')"
+		now="$(git -C "$CLONE" rev-parse HEAD)"
+		if [ -n "$want" ] && [ "$now" = "$want" ]; then
+			echo "  ✓ 已自动拉回 $V：$(git -C "$CLONE" log --oneline -1)"
+		else
+			echo "  ✗ 没回到 $V（现在 HEAD=$now，期望=$want）—— 自动更新链路有问题"
+		fi
+		;;
+	*)
+		echo "  安装源是分支（$V）—— 钉分支时自动更新应当**不动作**（别拿最新 tag 覆盖有意的固定）"
+		git -C "$CLONE" reset --hard -q HEAD~1
+		rm -f "$STATE"
+		(cd "$SB/proj" && PI_BASELINE_UPDATE_TTL_HOURS=0 pi -p "ok" 2>&1 | grep -a "team-baseline" || true)
+		echo "  HEAD 现在：$(git -C "$CLONE" log --oneline -1)（应当还是上面退后的那一格）"
+		;;
+	esac
+else
+	echo "  （没找到 clone —— 跳过）"
+fi
+
+echo
 echo "判据：① pi list 每项都带安装路径 ② node_modules 里有清单里的包 ③ rtk 能被找到"
 echo "      ④ settings.json 里有 subagents 和 compaction ⑤ 扩展配置已补（rtk + 审计）"
-echo "      ⑥ 模板说明键没泄漏 ⑦ 审计日志真写出来了且没有重复加载"
+echo "      ⑥ 模板说明键没泄漏 ⑦ 审计日志真写出来了且没有重复加载 ⑧ 自动更新把退后的 clone 拉回了 tag"
 echo "清理：rm -rf \"$SB\""

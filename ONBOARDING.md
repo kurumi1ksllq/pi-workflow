@@ -28,7 +28,7 @@ export DEEPSEEK_API_KEY=...
 ## 3. 装团队基线（**全局**，一次装完所有项目通用）
 
 ```bash
-pi install git:github.com/kurumi1ksllq/pi-workflow@v1.8.0
+pi install git:github.com/kurumi1ksllq/pi-workflow@v1.9.0
 ```
 
 **注意没有 `-l`。** 这是全局安装，装到 `~/.pi/agent/`，
@@ -81,9 +81,9 @@ pi
 - 在 pi 里问「团队基线是哪一版」
 - 敲 `/team-baseline` 看自检报告（只在交互模式有输出）：清单同步、共享设置、扩展配置各补了什么都会列出来
 - `Ctrl+O` 展开完整启动信息
-- `pi list` 的 **User packages** 里应含 `pi-workflow@v1.8.0` 与清单里的那些包，且每项都带安装路径
+- `pi list` 的 **User packages** 里应含 `pi-workflow@v1.9.0` 与清单里的那些包，且每项都带安装路径
 
-**没生效就按顺序查**：第 2 步的凭据配了吗 → `pi list` 里有 `pi-workflow@v1.8.0` 吗
+**没生效就按顺序查**：第 2 步的凭据配了吗 → `pi list` 里有 `pi-workflow@v1.9.0` 吗
 
 ## 你会自动获得什么
 
@@ -111,7 +111,7 @@ pi
 **扩展默认配置**。都是"只补缺"：你已经设过的键、你调过的扩展配置，一律不动。
 
 ```bash
-pi install git:github.com/kurumi1ksllq/pi-workflow@v1.8.0   # 1. 换版本
+pi install git:github.com/kurumi1ksllq/pi-workflow@v1.9.0   # 1. 换版本
 pi                                                           # 2. 启动：提示补了什么
 pi                                                           # 3. 再启动一次：新清单里的包装上
 ```
@@ -122,7 +122,7 @@ pi                                                           # 3. 再启动一�
 
 ```bash
 pi remove npm:pi-rtk-optimizer          # 1. 清掉旧版清单遗留的那个扩展（如果它在你设置里）
-pi install git:github.com/kurumi1ksllq/pi-workflow@v1.8.0   # 2. 换版本
+pi install git:github.com/kurumi1ksllq/pi-workflow@v1.9.0   # 2. 换版本
 pi                                       # 3. 启动：扩展补 rtk + 重写清单
 pi                                       # 4. 再启动一次：清单里的包才装上
 ```
@@ -139,24 +139,36 @@ pi                                       # 4. 再启动一次：清单里的包�
 团队清单里的包都钉了版本，正常情况下这个提示不该出现。出现了说明你手上那份清单是旧的：
 
 ```bash
-pi install git:github.com/kurumi1ksllq/pi-workflow@v1.8.0   # 1. 换到钉版本的清单
+pi install git:github.com/kurumi1ksllq/pi-workflow@v1.9.0   # 1. 换到钉版本的清单
 pi                                                           # 2. 启动：扩展把不带版本的旧条目换成钉版本
 pi                                                           # 3. 再启动一次：按钉的版本装齐
 ```
 
 之后再看到这个提示，说明清单本身漏了版本号 —— 告诉维护者补上。
 
-## 之后怎么更新基线
+## 之后怎么更新基线：不用管
 
-**重跑一次 install，带上新版本号：**
+**装一次就自动跟。** 基线扩展每次启动 pi 时（最多一小时查一次远端）比对远端最新版本，
+落后就自己把包目录切过去，终端会提示：
 
-```bash
-pi install git:github.com/kurumi1ksllq/pi-workflow@<新版本>
+```
+[team-baseline] 团队基线已自动更新：v1.8.0 → v1.9.0 —— **重启 pi 生效**
 ```
 
-`pi install` 会把已有的那份切到新版本，不用删任何目录。
+看到这句，退出再启动一次就是新版。没看到就说明你已经是最新的，什么都不用做。
 
-⚠️ **别用 `pi update`** —— 实测它不会换版本，也不会对齐你手改过的 ref。
+想确认自己在哪一版：在 pi 里敲 `/team-baseline`（会有一行「自动更新：✓ 已是最新 tag vX.Y.Z」）。
+
+自动更新不生效的少数情况 —— 都只影响你自己，按提示手动来一次即可：
+
+| 情况 | 怎么办 |
+| --- | --- |
+| 你的版本太老（早于 v1.9.0，包里还没有自动更新逻辑） | 手动跑一次：`pi install git:github.com/kurumi1ksllq/pi-workflow@v1.9.0` 之后就不用管了 |
+| 提示「包目录里有未提交的改动 —— 没敢动」 | 你改过包目录里的文件；`git -C ~/.pi/agent/git/github.com/kurumi1ksllq/pi-workflow status` 看一眼，不需要就 `git checkout -- .` 还原，下次启动会自动跟上 |
+| 网络长期连不上 GitHub | 连上后重启 pi 即可；也可以手动 `pi install ...@<版本>` |
+| 你不想自动跟 | 设环境变量 `PI_BASELINE_SELF_UPDATE=off` |
+
+⚠️ **别用 `pi update --all`** 更新扩展 —— 它会顺带升级 pi 本身。
 
 ## 你自己的东西放哪
 

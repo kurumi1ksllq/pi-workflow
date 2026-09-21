@@ -1,5 +1,25 @@
 # 变更记录
 
+## v1.9.0
+- **自动更新：装一次就自动跟远端最新 tag**（维护者只管 `release.sh` 打 tag + push，成员零动作）。
+  `team-baseline` 扩展每次启动（默认 1 小时最多查一次远端）比对远端最新 `vX.Y.Z` tag 与包目录的 HEAD，
+  落后就 `git fetch` + `reset --hard` 到新 tag，并**同时改写 settings 里的 ref** —— 这一步不能省：
+  实测带 ref 的源在 `pi update --extensions` 时会被 `git reset --hard <ref>` 拉回去，只更新 clone 不改 ref 等于白干
+- **只敢动 pi 自己 clone 的包目录**：clone 必须在 `<agent dir>/git/` 下、settings 里有团队包条目、origin 指向本仓库；
+  开发副本（维护者工作区）永远不碰。有未提交的跟踪文件改动时**拒绝动手**并说明原因；
+  多实例并发用锁文件挡住（5 分钟自动过期）
+- **钉分支/commit 时不跟 tag**（那是有意的固定，比如「发版前先验 main」）；`PI_BASELINE_SELF_UPDATE=off` 整体关掉；
+  `PI_BASELINE_UPDATE_TTL_HOURS` 调查询间隔（`0` = 每次查）；网络/git 失败一律静默，不影响启动
+- **更新在下次启动生效**（本会话用的还是旧版内容），终端给一行提示；`/team-baseline` 多一行「自动更新：…」，
+  `PI_BASELINE_DEBUG` 的诊断文件也写 `selfUpdate=`
+- **文档纠错**：以前写的「`pi update --extensions` 不会更新」只对钉 tag 成立 —— 实测带 ref 的源会被
+  reconcile 回配置的 ref、不写 ref 的源会 `fetch --prune` + `reset --hard @{upstream}` 真前进
+  （pi 0.86.1 源码 + 隔离 agent 目录实测）；pi 自己始终只提示、不自动应用
+- 测试：新增 `scripts/test-self-update.mjs`（离线、秒级、不联网 —— 造本地 bare 仓库当远端、按 pi 目录约定搓 clone、
+  直接 import clone 里的扩展）覆盖 5 个场景；`test-extension.mjs` 加场景 8（挑最新 tag 的版本比较，1.10.0 要赢过 1.9.9）；
+  `simulate-member.sh` 加第 7 步（把 clone 退回一格 → 启动 → 断言自动拉回 tag）
+- README / ONBOARDING 的「成员如何更新基线」整节重写
+
 ## v1.8.0
 - **新增审计日志扩展 `extensions/audit-log.ts`**：给每个会话留一份结构化流水 ——
   token（input / cacheRead / cacheWrite / output / reasoning）、工具调用（名字 / 参数预览 / 耗时 / 成败）、

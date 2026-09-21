@@ -11,10 +11,15 @@
 //   5. 团队共享设置（team/agent-settings.json）只补缺：成员自己设过的键一个都不能被覆盖
 //   6. 扩展自己的配置（team/extensions/*.json）只补不覆盖：成员调过的不许被重置
 //   7. 模板里 `_` 开头的说明键不许写进设置
+//   8. 自动更新挑版本：从 ls-remote 输出里挑最大的 vX.Y.Z（1.10.0 要赢过 1.9.9，预发布与分支不入选）
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+
+// 扩展顶层现在还会做「自动更新」（git ls-remote + fetch）。离线测里必须关掉，
+// 否则这个测试会去动网络；真实自更新链路由 scripts/test-self-update.mjs 用本地 bare 仓库验。
+process.env.PI_BASELINE_SELF_UPDATE = "off";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const EXT = path.join(repoRoot, "extensions", "team-baseline.ts");
@@ -145,6 +150,29 @@ check(
 	fs.readFileSync(rtkCfgPath, "utf-8") === fs.readFileSync(path.join(extCfgDir, "pi-rtk-optimizer.json"), "utf-8"),
 	"扩展配置没按模板补上（场景 6）",
 );
+
+// —— 场景 8：自动更新的纯函数（挑最新 tag）——
+const mod8 = await import(pathToFileURL(EXT).href + "?pure=" + Date.now());
+const { pickLatestTag, compareVersions } = mod8;
+const lsRemote = [
+	"1111111111111111111111111111111111111111\trefs/tags/v1.7.0",
+	"2222222222222222222222222222222222222222\trefs/tags/v1.10.0",
+	"3333333333333333333333333333333333333333\trefs/tags/v1.9.9",
+	"4444444444444444444444444444444444444444\trefs/tags/v2.0.0-rc1",
+	"5555555555555555555555555555555555555555\trefs/heads/main",
+	"6666666666666666666666666666666666666666\trefs/tags/v1.8.0^{}",
+	"",
+].join("\n");
+const latest = pickLatestTag(lsRemote);
+check(
+	latest?.tag === "v1.10.0",
+	`挑最新 tag 挑错了：${latest?.tag}（v1.10.0 该赢过 v1.9.9；预发布、分支、剥离行都不该入选）`,
+);
+check(latest?.sha === "2222222222222222222222222222222222222222", "最新 tag 对应的 sha 不对（场景 8）");
+check(compareVersions("v1.10.0", "v1.9.9") > 0, "compareVersions 把 1.10.0 排到了 1.9.9 后面（场景 8：字符串比较的老毛病）");
+check(compareVersions("v1.8.0", "v1.8.0") === 0, "同版本该返回 0（场景 8）");
+check(pickLatestTag("") === undefined, "空输入不该挑出 tag（场景 8）");
+check(pickLatestTag("abc\trefs/tags/v1.0.0") === undefined, "sha 不合法时不该挑出 tag（场景 8）");
 
 console.log("设置里的 packages：", JSON.stringify(after.packages));
 console.log("注入段版本行：", injected4.systemPrompt.split("\n").find((l) => l.includes("pi-workflow")));

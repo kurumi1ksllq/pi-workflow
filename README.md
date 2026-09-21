@@ -9,7 +9,7 @@
 2. 全局装基线：
 
    ```bash
-   pi install git:github.com/kurumi1ksllq/pi-workflow@v1.8.0
+   pi install git:github.com/kurumi1ksllq/pi-workflow@v1.9.0
    ```
 
    **注意没有 `-l`** —— 这是全局安装，落到 `~/.pi/agent/settings.json`，
@@ -27,7 +27,7 @@
 **推荐写法，`git:` 前缀不能省：**
 
 ```
-git:github.com/<org>/pi-workflow@v1.8.0
+git:github.com/<org>/pi-workflow@v1.9.0
 ```
 
 省掉前缀 pi 会当本地目录，报 `Path does not exist: ...\github.com\org\pi-workflow` ——
@@ -49,14 +49,16 @@ git:github.com/<org>/pi-workflow@v1.8.0
 （`git://` 字面上就以 `git:` 开头），剥掉前缀剩 `//127.0.0.1:9418/repo`，解析失败，
 然后**静默降级成本地路径**。官方文档声称支持 `git://`，实测不支持。
 
-锁版本还是跟最新：
+锁版本还是跟最新（pi 0.86.1 源码 + 隔离 agent 目录实测）：
 
 | 想要 | 写法 | `pi update --extensions` 行为 |
 | --- | --- | --- |
-| 锁死 | `...@v1.0.0`（tag 或 commit） | 跳过，永远不动，只能手动改 ref |
-| 跟最新 | `git:github.com/org/repo`（不写 ref） | 拉远端默认分支最新 |
+| 钉死 | `...@v1.0.0`（tag 或 commit） | 把 clone **拉回配置的这个 ref**（不会前进，换 tag 才会动） |
+| 跟最新 | `git:github.com/org/repo`（不写 ref） | `git fetch --prune origin <默认分支>` + `reset --hard @{upstream}`，真前进 |
 
-带 ref 一律被标记为 pinned。团队分发先用锁死的，出问题好回滚，稳定了再谈自动跟。
+pi 自己**不会自动应用**更新 —— 启动时只在交互模式弹一句「Package Updates Available」等人手动敲命令，
+钉了 tag 的源连这句提示都不弹。所以团队基线自带一套自动更新（见「成员如何更新基线」），
+写法定为**钉 tag**：一个 tag = 一次发版，回滚就把 tag 指回旧 commit。
 
 ## 发版流程（维护者）
 
@@ -73,29 +75,37 @@ git:github.com/<org>/pi-workflow@v1.8.0
   `git describe` 只做备选（踩过两次：一次是 tag 里包的 `package.json` version 忘了改；
   一次是 pi 升级已有 clone 时只 `git fetch <ref>`、不建本地 tag，describe 会报成 v1.4.4-8-gXXXX）
 - 文档里的安装命令由脚本统一改写（`pi-workflow@vX.Y.Z` 和 `simulate-member.sh vX.Y.Z`），所以**别再手工改版本号**，照抄当前版本就行
-- 发版后通知成员升级（见下一节），并**先在干净目录验一遍**（见「推完之后怎么验证」）
+- 发版后**不用逐个通知**：成员下次启动 pi 会自动跟上（见「成员如何更新基线」）；
+  但发版后仍要**先在干净目录验一遍**（见「推完之后怎么验证」）
 
-## 成员如何更新基线（重要，实测过）
+## 成员如何更新基线：不用管，装一次就自动跟
 
-**pi 不会自动更新已装的包，`pi update` 也不会。** 实测三种方式全都没用 ——
-启动 pi、`pi update --extensions`、`pi update --all`，装完就冻结在那一刻。
+**成员零动作。** 基线扩展在每次启动 pi 时（默认 1 小时最多查一次远端）比对远端的**最新 vX.Y.Z tag**
+与本地包目录的 HEAD：落后就 `git fetch` + `reset --hard` 到新 tag，并把 `~/.pi/agent/settings.json`
+里的源一起改写成新标签。维护者这边只需要 `./scripts/release.sh` 打 tag + push。
 
-唯一有效的更新动作 —— **重跑 install 带新版本号**：
+- **更新本次会话不生效** —— pi 在扩展加载前就把资源列表收完了。终端会提示
+  「团队基线已自动更新：v1.8.0 → v1.9.0 —— 重启 pi 生效」，下次启动才是新版
+- **代价是一秒多的网络时间、且一小时只查一次**（`PI_BASELINE_UPDATE_TTL_HOURS=0` = 每次查）；
+  网络不通、git 不在 PATH 一律静默跳过，绝不影响启动
+- **不想自动跟**：设 `PI_BASELINE_SELF_UPDATE=off`；或把设置里的源钉成分支（`pi-workflow@main`）
+  —— 钉分支/commit 的写法自动更新**不会碰**，适合「发版前先验主干」
+- **确认自己在哪一版**：在 pi 里敲 `/team-baseline`（会显示「自动更新：✓ 已是最新 tag vX.Y.Z」），
+  或直接问「团队基线是哪一版」。注入段里带版本号，读的是设置里钉的那个 ref
+- **为什么它必须自己改设置里的 ref**：带 ref 的源在 `pi update --extensions` 时会被
+  `git reset --hard <ref>` 拉回去 —— 只更新 clone 不改 ref，成员随手一次 update 就打回旧版
+- **回滚**：`git tag -f vX.Y.Z <旧 commit>` + `git push -f origin vX.Y.Z`，成员下次启动自动退回去
+- **包目录里别手改文件**（`~/.pi/agent/git/github.com/kurumi1ksllq/pi-workflow/`）：
+  自动更新发现有未提交的跟踪文件改动会**拒绝动手**（怕丢东西），并在终端说明原因
+
+自动更新覆盖不到时（版本太老、要跳到指定版本、网络长期不通）手动兜底：
 
 ```bash
-pi install git:github.com/kurumi1ksllq/pi-workflow@<新版本>
+pi install git:github.com/kurumi1ksllq/pi-workflow@<版本>
 ```
 
-`pi install` 会把已有的 clone 切到指定版本，**不需要删目录**。
-（`pi update` 不行 —— 它不会换版本，也不会对齐你手改过的 ref。）
-
-所以：
-
-- **ref 一律锁 tag**（`@vX.Y.Z`）。不写 ref 也一样不会自动更新，
-  只会让你不知道队友此刻跑的是哪一版
-- 别用 `pi update --all` 更新扩展 —— 它会顺带升级 pi 本身
-- **确认自己更新成功**：在 pi 里问「团队基线是哪一版」，或敲 `/team-baseline`。
-  注入段里带版本号（读的是你设置里钉的 ref，不会和实际版本对不上）
+`pi install` 会把已有的那份切到指定版本，**不需要删目录**。别用 `pi update --all` ——
+它会顺带升级 pi 本身。
 
 ## 推完之后怎么验证
 
@@ -105,16 +115,27 @@ pi install git:github.com/kurumi1ksllq/pi-workflow@<新版本>
 node scripts/test-extension.mjs
 ```
 
-它离线跑扩展的全部同步逻辑，覆盖七条踩过坑的规则：钉版本替换不带版本的旧条目、缺的包追加、
+它离线跑扩展的全部同步逻辑，覆盖八条踩过坑的规则：钉版本替换不带版本的旧条目、缺的包追加、
 别人的私有条目与无关设置项不动 + 幂等、版本标识优先用设置里钉的 ref、
 共享设置只补缺（成员自己设过的键不被覆盖）、扩展配置只补不覆盖、
-模板里 `_` 开头的说明键不写进设置。挂了会 exit 1。
+模板里 `_` 开头的说明键不写进设置、自动更新挑最新 tag 的版本比较（1.10.0 要赢过 1.9.9）。
+挂了会 exit 1。
+
+**自动更新那条链路单独验（也是离线，秒级）**：
+
+```bash
+node scripts/test-self-update.mjs
+```
+
+它造一个本地 bare 仓库当「远端」，按 pi 的目录约定搓出 clone，然后直接 import clone 里的扩展 ——
+覆盖面：落后一个 tag 会自动更新（clone + settings 的 ref 一起动）、已是最新时不动、
+包目录有未提交改动时拒绝动手、钉分支时不跟 tag、开发副本完全不碰。
 
 **发版前再跑一次全链路（要网络，约一两分钟）** —— 别等成员踩了才发现问题。
 一行命令，在隔离目录里模拟一个**全新成员**：
 
 ```bash
-bash scripts/simulate-member.sh v1.8.0
+bash scripts/simulate-member.sh v1.9.0
 ```
 
 它做的事：造一个独立的 agent 配置目录（不碰你本机的 `~/.pi/agent`）+
@@ -124,14 +145,14 @@ bash scripts/simulate-member.sh v1.8.0
 **判据**：`User packages` 里每一项都**带安装路径**（`pi-workflow` + 清单里的那些包）、
 隔离目录的 `npm/node_modules` 里确实有它们、rtk 能被 `command -v` 找到、
 隔离目录的 `settings.json` 里出现 `subagents` 与 `compaction`、
-`extensions/pi-rtk-optimizer/config.json` 存在。
+`extensions/pi-rtk-optimizer/config.json` 存在、最后一步把 clone 退回一格后**下次启动又自动拉回了 tag**。
 只看到包名没有路径 = 还在设置里没装上 —— 少了第二次启动。
 
 手工等价流程：
 
 ```bash
 SB='C:\Users\<你>\pi-check-agent'   # 隔离的 agent 目录，Windows 路径写法
-PI_CODING_AGENT_DIR="$SB" pi install git:github.com/kurumi1ksllq/pi-workflow@v1.8.0
+PI_CODING_AGENT_DIR="$SB" pi install git:github.com/kurumi1ksllq/pi-workflow@v1.9.0
 # 隔离目录不带凭据，启动前把 auth.json / models.json 拷进去
 PI_CODING_AGENT_DIR="$SB" pi -p ok    # 第一次：扩展写清单 + 补 rtk + 补共享设置
 PI_CODING_AGENT_DIR="$SB" pi list     # 应看到清单里的包都带路径
@@ -191,18 +212,18 @@ PI_CODING_AGENT_DIR="$SB" pi list     # 应看到清单里的包都带路径
 | --- | --- |
 | `skills/` | 按需加载的能力包。`00-core/` 全员共享，其余按角色分目录 |
 | `prompts/` | 斜杠命令，`review.md` → `/review` |
-| `extensions/` | `team-baseline.ts`（引导扩展：注入规范、补 MCP 基线、同步包清单、补共享设置、补扩展配置、补 rtk）+ `audit-log.ts`（审计日志，见下节） |
+| `extensions/` | `team-baseline.ts`（引导扩展：注入规范、补 MCP 基线、同步包清单、补共享设置、补扩展配置、补 rtk、自动跟最新 tag）+ `audit-log.ts`（审计日志，见下节） |
 | `team/` | 扩展的数据源：`RULES.md`（规范）+ `mcp.template.json`（MCP 基线）+ `packages.json`（第三方包清单）+ `agent-settings.json`（共享设置补丁）+ `extensions/`（各扩展的默认配置） |
 | `tools/` | `rtk.exe`，`pi-rtk-optimizer` 需要的二进制，随包分发 |
 | `templates/` | 项目级配置模板 `project-settings.json`、项目侧哨兵 `project-AGENTS.md` |
-| `scripts/` | `release.sh`（发版）、`simulate-member.sh`（从零装验证）、`test-extension.mjs`（基线扩展离线测）、`test-audit-extension.mjs`（审计扩展离线测）、`pi_audit_report.py`（审计报表） |
+| `scripts/` | `release.sh`（发版）、`simulate-member.sh`（从零装验证）、`test-extension.mjs`（基线扩展离线测）、`test-self-update.mjs`（自动更新链路离线测）、`test-audit-extension.mjs`（审计扩展离线测）、`pi_audit_report.py`（审计报表） |
 | `docs/` | 怎么写各类资源 + `audit-log.md`（审计字段与口径）、`audit-report.md`（报表用法）。**说明文档一律放这里，别放 skills/** |
 | `ONBOARDING.md` | 给成员的上手指南，**可直接转发** |
 | `CHANGELOG.md` | 变更记录 |
 
 ## 扩展做了什么（成员不用管，但该知道）
 
-`team-baseline` 扩展在每次会话做六件事：
+`team-baseline` 扩展在每次会话做七件事：
 
 1. **把 `team/RULES.md` 注入系统提示** —— pi 原生不加载包内的 AGENTS.md，这是绕过办法
 2. **项目缺 `.mcp.json` 时从包里补一份** —— 绝不覆盖已有的；只在有 `.pi/` 的目录里动手
@@ -210,6 +231,8 @@ PI_CODING_AGENT_DIR="$SB" pi list     # 应看到清单里的包都带路径
 4. **把 `team/agent-settings.json` 只补缺地并进全局设置** —— 成员自己设过的键不动
 5. **把 `team/extensions/<扩展名>.json` 补到扩展自己的配置位置** —— 目标已存在就完全不动
 6. **缺 rtk 时从 `tools/` 补一份到 npm 全局 bin** —— 补完用 `where` 验一次
+7. **跟远端最新 tag 对齐**（放在最后，本会话仍用旧版）—— 落后就 fetch + reset --hard，
+   并把 settings 里的 ref 一起改写；有未提交改动则拒绝动手（细节见「成员如何更新基线」）
 
 所以改团队规范 = 改 `team/RULES.md` 然后发新版；改 MCP 基线 = 填 `team/mcp.template.json`；
 改全员共享设置 = 改 `team/agent-settings.json`。

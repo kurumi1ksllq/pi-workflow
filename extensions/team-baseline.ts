@@ -38,6 +38,63 @@ const agentSettingsFile = path.join(packageRoot, "team", "agent-settings.json");
 const extensionConfigsDir = path.join(packageRoot, "team", "extensions");
 const pkgJsonFile = path.join(packageRoot, "package.json");
 
+// ───────────────────── 自动更新：跟远端最新 tag ─────────────────────
+// 维护者只管 `release.sh` 打 tag + push，成员零动作：本扩展每次启动（默认 1 小时最多查一次
+// 远端）比对**远端最新的 vX.Y.Z tag** 与本地 clone 的 HEAD，落后就 fetch + reset --hard，
+// 并把 settings 里的源改写成新 tag。
+//
+// 为什么不能靠 pi 自己（0.86.1 源码 + 隔离 agent 目录实测）：
+//   - pi 启动只在交互模式弹「Package Updates Available」，**不自动应用**；
+//   - 钉了 tag 的源连提示都不弹（checkForAvailableUpdates 直接跳过 pinned）；
+//   - 带 ref 的源在 `pi update --extensions` 时会被 `git reset --hard <ref>` **拉回配置的
+//     那个 tag**。所以自动更新必须同时改写 settings 里的 ref —— 否则成员随手一次 update
+//     就把 clone 打回旧版。
+//
+// 三道闸限制它只敢动「pi 自己 clone 的团队包目录」：clone 必须位于 <agent dir>/git/ 下、
+// settings 里要有团队包的源条目、origin 指向本仓库。开发副本（比如维护者的 E:\hermes\team-pi）
+// 因此永远不会被 reset --hard（那会丢掉未提交的活儿）。
+const UPDATE_TTL_MS = (() => {
+	const hours = Number(process.env.PI_BASELINE_UPDATE_TTL_HOURS);
+	if (Number.isFinite(hours) && hours >= 0) return Math.round(hours * 3600_000);
+	return 3600_000; // 默认 1 小时
+})();
+const UPDATE_LOCK_STALE_MS = 5 * 60_000;
+// 状态与锁放自己名下（extensions/team-baseline/），与 syncExtensionConfigs 给别的扩展补配置的
+// extensions/<扩展名>/config.json 互不干扰
+const updateDir = () => path.join(getAgentDir(), "extensions", "team-baseline");
+const updateStateFile = () => path.join(updateDir(), "update-state.json");
+const updateLockFile = () => path.join(updateDir(), ".update.lock");
+
+/** 语义化版本比较：v1.10.0 > v1.9.9（按数字段比，不是字符串比） */
+export function compareVersions(a: string, b: string): number {
+	const pa = a.replace(/^v/, "").split(".");
+	const pb = b.replace(/^v/, "").split(".");
+	for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+		const d = (parseInt(pa[i] ?? "0", 10) || 0) - (parseInt(pb[i] ?? "0", 10) || 0);
+		if (d !== 0) return d;
+	}
+	return 0;
+}
+
+export type LatestTag = { tag: string; sha: string };
+
+/**
+ * 纯函数：从 `git ls-remote --tags --refs origin` 的输出里挑出最大的 vX.Y.Z tag。
+ *
+ * 只认严格三段数字的 tag —— 带后缀的预发布（v1.3.0-rc1）故意不认，免得半成品被自动推给全员。
+ * 离线可测，见 scripts/test-extension.mjs 场景 8。
+ */
+export function pickLatestTag(lsRemoteOutput: string): LatestTag | undefined {
+	let best: LatestTag | undefined;
+	for (const line of lsRemoteOutput.split("\n")) {
+		const m = line.match(/^([0-9a-fA-F]{40})\s+refs\/tags\/(v\d+\.\d+\.\d+)$/);
+		if (!m) continue;
+		const [, sha, tag] = m;
+		if (!best || compareVersions(tag, best.tag) > 0) best = { tag, sha: sha.toLowerCase() };
+	}
+	return best;
+}
+
 function readIfExists(file: string): string | undefined {
 	try {
 		return fs.readFileSync(file, "utf-8");
@@ -58,6 +115,16 @@ function readIfExists(file: string): string | undefined {
  * —— 那才是"这次装的是哪一版"的权威答案。
  */
 function configuredRef(): string | undefined {
+	const spec = baselineSourceSpec();
+	const m = spec?.match(/@(v\d+\.\d+\.\d+[^@]*)$/);
+	return m ? m[1] : undefined;
+}
+
+/**
+ * 团队包自己的 settings 条目（`git:github.com/.../pi-workflow@vX.Y.Z`）。
+ * 全局优先、其次项目级；同作用域里优先返回**带 ref 的那条**（历史写法里可能混着不带 ref 的）。
+ */
+function baselineSourceSpec(): string | undefined {
 	const candidates = [
 		path.join(getAgentDir(), "settings.json"),
 		path.join(process.cwd(), ".pi", "settings.json"),
@@ -68,12 +135,9 @@ function configuredRef(): string | undefined {
 		try {
 			const pkgs = JSON.parse(raw)?.packages;
 			if (!Array.isArray(pkgs)) continue;
-			for (const entry of pkgs) {
-				const spec = String(entry);
-				if (!spec.includes("pi-workflow")) continue;
-				const m = spec.match(/@(v\d+\.\d+\.\d+[^@]*)$/);
-				if (m) return m[1];
-			}
+			const mine = pkgs.map(String).filter((spec) => spec.includes("pi-workflow"));
+			if (mine.length === 0) continue;
+			return mine.find((spec) => /@[^@/]+$/.test(spec)) ?? mine[0];
 		} catch {
 			// 设置读坏了就当没有，继续试下一个
 		}
@@ -425,6 +489,203 @@ function ensureRtk(): RtkState {
 	return "not-in-path";
 }
 
+// ───────────────────────── 自动更新的实现 ─────────────────────────
+
+export type SelfUpdateState =
+	| "current" // 已经是最新 tag
+	| "updated" // 刚更新到新 tag
+	| "off" // 显式关掉（PI_BASELINE_SELF_UPDATE=off）
+	| "not-a-clone" // 不是 pi clone 出来的包目录（开发副本、本地路径装法）—— 不碰
+	| "branch-ref" // 源钉的是分支/commit（不是 vX.Y.Z）—— 有意的固定，不覆盖
+	| "throttled" // TTL 内，本轮不查
+	| "locked" // 另一个 pi 实例正在更新
+	| "no-tags" // 远端没有合法的 vX.Y.Z tag
+	| "dirty" // clone 里有未提交的跟踪文件改动 —— 不碰，避免丢东西
+	| "failed"; // git / 网络失败（静默）
+
+type SelfUpdateResult = { state: SelfUpdateState; tag?: string; from?: string };
+
+function runGitQuiet(args: string[], timeoutMs: number): string | undefined {
+	try {
+		return execFileSync("git", args, {
+			cwd: packageRoot,
+			encoding: "utf-8",
+			timeout: timeoutMs,
+			windowsHide: true,
+			stdio: ["ignore", "pipe", "ignore"],
+		}).trim();
+	} catch {
+		return undefined;
+	}
+}
+
+/** 只更新「pi 自己 clone 出来的团队包目录」—— 开发副本一律不碰（reset --hard 会丢活儿） */
+function isManagedClone(): boolean {
+	const gitRoot = path.join(getAgentDir(), "git");
+	const rel = path.relative(gitRoot, packageRoot);
+	if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return false;
+	if (!fs.existsSync(path.join(packageRoot, ".git"))) return false;
+	if (!baselineSourceSpec()) return false;
+	const origin = runGitQuiet(["remote", "get-url", "origin"], 5000);
+	return !!origin && origin.includes("pi-workflow");
+}
+
+function readUpdateState(): any {
+	try {
+		return JSON.parse(readIfExists(updateStateFile()) ?? "{}");
+	} catch {
+		return {};
+	}
+}
+
+function writeUpdateState(state: SelfUpdateState, extra: Record<string, unknown> = {}): void {
+	try {
+		fs.mkdirSync(updateDir(), { recursive: true });
+		fs.writeFileSync(
+			updateStateFile(),
+			JSON.stringify({ state, checkedAt: Date.now(), checkedAtIso: new Date().toISOString(), ...extra }, null, 2) + "\n",
+			"utf-8",
+		);
+	} catch {
+		// 状态写不了不影响更新本身
+	}
+}
+
+/** 把 settings 里团队包的 ref 改写成新 tag —— 不改的话 pi 的 update 会把 clone 拉回旧 tag */
+function retargetBaselineRef(newTag: string): boolean {
+	let changed = false;
+	for (const file of [
+		path.join(getAgentDir(), "settings.json"),
+		path.join(process.cwd(), ".pi", "settings.json"),
+	]) {
+		const raw = readIfExists(file);
+		if (!raw) continue;
+		try {
+			const settings = JSON.parse(raw);
+			if (!Array.isArray(settings.packages)) continue;
+			let localChanged = false;
+			settings.packages = settings.packages.map((entry: unknown) => {
+				const spec = String(entry);
+				if (!spec.includes("pi-workflow")) return entry;
+				const want = `${packageKey(spec)}@${newTag}`;
+				if (spec === want) return entry;
+				localChanged = true;
+				return want;
+			});
+			if (!localChanged) continue;
+			fs.writeFileSync(file, JSON.stringify(settings, null, 2) + "\n", "utf-8");
+			changed = true;
+		} catch {
+			// 写不动就只留 clone 已更新；操作者能从 /team-baseline 看出来
+		}
+	}
+	return changed;
+}
+
+/**
+ * 跟远端最新 tag 对齐。全程失败静默（只写状态文件），
+ * 唯一会往 stderr 说话的路径是「真的更新了」—— 见 export default 里的调用处。
+ */
+function selfUpdate(): SelfUpdateResult {
+	if (process.env.PI_BASELINE_SELF_UPDATE === "off") return { state: "off" };
+	if (!isManagedClone()) return { state: "not-a-clone" };
+
+	// 源钉的是分支名或 commit（不是 vX.Y.Z）→ 那是有意的固定，别拿「最新 tag」去覆盖它
+	const pinnedRef = baselineSourceSpec()?.match(/@([^@/]+)$/)?.[1];
+	if (pinnedRef && !/^v\d+\.\d+\.\d+$/.test(pinnedRef)) return { state: "branch-ref" };
+
+	const from = configuredRef();
+	const last = Number(readUpdateState()?.checkedAt ?? 0);
+	if (last && Date.now() - last < UPDATE_TTL_MS) return { state: "throttled" };
+
+	const lock = updateLockFile();
+	let locked = false;
+	try {
+		fs.mkdirSync(updateDir(), { recursive: true });
+		fs.closeSync(fs.openSync(lock, "wx"));
+		locked = true;
+	} catch {
+		// 锁已存在：可能是上一个进程崩了留下的 —— 够旧就抢过来，否则让给别人
+		try {
+			if (Date.now() - fs.statSync(lock).mtimeMs < UPDATE_LOCK_STALE_MS) return { state: "locked" };
+			fs.rmSync(lock, { force: true });
+			fs.closeSync(fs.openSync(lock, "wx"));
+			locked = true;
+		} catch {
+			return { state: "locked" };
+		}
+	}
+
+	try {
+		const lsRemote = runGitQuiet(["ls-remote", "--tags", "--refs", "origin"], 30_000);
+		if (lsRemote === undefined) {
+			writeUpdateState("failed");
+			return { state: "failed" };
+		}
+		const latest = pickLatestTag(lsRemote);
+		if (!latest) {
+			writeUpdateState("no-tags");
+			return { state: "no-tags" };
+		}
+		const head = (runGitQuiet(["rev-parse", "HEAD"], 5000) ?? "").toLowerCase();
+		if (head === latest.sha) {
+			writeUpdateState("current", { tag: latest.tag });
+			return { state: "current", tag: latest.tag };
+		}
+		// 落后了。有未提交的跟踪文件改动就停手 —— 那是别人的活儿，不该被 reset 掉
+		const dirty = runGitQuiet(["status", "--porcelain", "--untracked-files=no"], 10_000);
+		if (dirty) {
+			writeUpdateState("dirty", { tag: latest.tag, detail: dirty.slice(0, 500) });
+			return { state: "dirty", tag: latest.tag };
+		}
+		if (runGitQuiet(["fetch", "--no-tags", "origin", latest.tag], 180_000) === undefined) {
+			writeUpdateState("failed", { tag: latest.tag });
+			return { state: "failed", tag: latest.tag };
+		}
+		if (runGitQuiet(["reset", "--hard", "FETCH_HEAD"], 30_000) === undefined) {
+			writeUpdateState("failed", { tag: latest.tag });
+			return { state: "failed", tag: latest.tag };
+		}
+		retargetBaselineRef(latest.tag);
+		writeUpdateState("updated", { tag: latest.tag, from });
+		return { state: "updated", tag: latest.tag, from };
+	} finally {
+		if (locked) {
+			try {
+				fs.rmSync(lock, { force: true });
+			} catch {
+				// 下次靠 mtime 兜底
+			}
+		}
+	}
+}
+
+/** `/team-baseline` 与调试输出里给人看的一行 */
+function selfUpdateLabel(r: SelfUpdateResult): string {
+	switch (r.state) {
+		case "updated":
+			return `✓ 本次启动已自动更新到 ${r.tag}（重启 pi 后生效）`;
+		case "current":
+			return `✓ 已是最新 tag${r.tag ? ` ${r.tag}` : ""}`;
+		case "throttled":
+			return "（本轮没查：距上次检查不到 TTL；设 PI_BASELINE_UPDATE_TTL_HOURS=0 可强制每次查）";
+		case "off":
+			return "已关闭（PI_BASELINE_SELF_UPDATE=off）";
+		case "not-a-clone":
+			return "（不是 pi 装出来的包目录，没动）";
+		case "branch-ref":
+			return "（源钉的是分支/commit，不自动跟 tag —— 想自动跟就改成钉 vX.Y.Z）";
+		case "locked":
+			return "（另一个 pi 正在更新，本轮跳过）";
+		case "no-tags":
+			return "（远端没有 vX.Y.Z 形式的 tag）";
+		case "dirty":
+			return `⚠ 远端已有 ${r.tag}，但包目录里有未提交改动，没敢动`;
+		default:
+			return "（跳过：git 或网络失败）";
+	}
+}
+
 export default function teamBaseline(pi: ExtensionAPI) {
 	const version = packageVersion();
 	const problems = healthCheck();
@@ -511,6 +772,26 @@ export default function teamBaseline(pi: ExtensionAPI) {
 		rtkResult = "error";
 	}
 
+	// ★ 自动更新放在**最后**：这次会话用的还是旧版内容（pi 在扩展加载前就把资源列表收完了），
+	//   这里只把 clone 拉到最新 tag，下次启动才是新版。维护者只管 push tag，成员零动作。
+	let selfUpdateResult: SelfUpdateResult = { state: "off" };
+	try {
+		selfUpdateResult = selfUpdate();
+		if (selfUpdateResult.state === "updated") {
+			console.error(
+				`[team-baseline] 团队基线已自动更新：${selfUpdateResult.from ? `${selfUpdateResult.from} → ` : ""}${selfUpdateResult.tag}` +
+					"（包目录已切到最新 tag，设置里的 ref 也改好了）—— **重启 pi 生效**",
+			);
+		} else if (selfUpdateResult.state === "dirty") {
+			console.error(
+				`[team-baseline] 远端已有新版本 ${selfUpdateResult.tag}，但包目录里有未提交的改动 —— 没敢动。` +
+					`手动升级：pi install git:github.com/kurumi1ksllq/pi-workflow@${selfUpdateResult.tag}`,
+			);
+		}
+	} catch {
+		selfUpdateResult = { state: "failed" };
+	}
+
 	pi.on("before_agent_start", async (event) => {
 		const projectDir = process.cwd();
 		const rules = readIfExists(rulesFile);
@@ -544,6 +825,7 @@ ${rules.trim()}
 					`settingsSync=${settingsResult}\n` +
 					`extConfigsSync=${extConfigsWritten.length ? extConfigsWritten.join(",") : "(无)"}\n` +
 					`rtkSync=${rtkResult}\n` +
+					`selfUpdate=${selfUpdateResult.state}${selfUpdateResult.tag ? ` (${selfUpdateResult.tag})` : ""}\n` +
 					`problems=${problems.length ? problems.join(" | ") : "(无)"}\n` +
 					`cwd=${projectDir}\n\n`;
 				fs.writeFileSync(path.join(dir, "team-baseline.debug.txt"), diag + injected, "utf-8");
@@ -576,6 +858,7 @@ ${rules.trim()}
 					`共享设置模板：${ok(fs.existsSync(agentSettingsFile))}`,
 					`扩展配置模板：${ok(fs.existsSync(extensionConfigsDir))}`,
 					`本次启动同步：清单 ${pkgResult} / 共享设置 ${settingsResult} / 扩展配置 ${extConfigsWritten.length ? extConfigsWritten.join("、") : "无"}`,
+					`自动更新：${selfUpdateLabel(selfUpdateResult)}`,
 					`本项目 .mcp.json：${fs.existsSync(projectMcp) ? "存在" : "不存在"}`,
 					`自检：${problems.length === 0 ? "✓ 全部通过" : "✗ " + problems.join("；")}`,
 					"",
