@@ -1,0 +1,5 @@
+{
+  "enabled": true,
+  "maxFieldChars": 2000,
+  "recordFullPrompt": false
+}

@@ -1,5 +1,25 @@
 # 变更记录
 
+## v1.8.0
+- **新增审计日志扩展 `extensions/audit-log.ts`**：给每个会话留一份结构化流水 ——
+  token（input / cacheRead / cacheWrite / output / reasoning）、工具调用（名字 / 参数预览 / 耗时 / 成败）、
+  加载的 skill（`filePath` + 来源包与版本）、压缩点 `tokensBefore`、收敛标记 `agent_settled`。
+  只落本机 `~/.pi/agent/audit/logs/<日期>.jsonl`，**不联网、对模型完全不可见**；
+  出口唯一、异常全吞（只写 stderr 且每类一次）、只有 `appendFileSync` 级写，不阻塞 agent 循环
+- **扩展带总开关**：`~/.pi/agent/extensions/audit-log/config.json` 里 `enabled:false` 立刻停止记录，
+  不用卸包。配置优先读用户目录（包自己的 clone 会被 `pi update` 覆盖，改 clone 留不住）；
+  模板 `team/extensions/audit-log.json` 由基线扩展首次启动补一份
+- **敏感字段落盘前脱敏**：Authorization/Bearer、`sk-` 类前缀、`password=` 这类 kv、URL userinfo、长 opaque 串。
+  不抄 toolResult / thinking 全文，只留字符数 + sha256 + `toolCallId`（回联 session jsonl 的 join 键）
+- **新增报表脚本 `scripts/pi_audit_report.py`**：一条命令出 Markdown（按天 / 按模型 / 按人 token 分布、
+  工具与失败率、skill 命中、收敛率、上下文压力、可选成本折算），末尾给只从统计里推的中文观察。
+  纯标准库、离线、无匹配数据也退出码 0
+- 文档：`docs/audit-log.md`（字段表 / 口径 / 已知缺口）、`docs/audit-report.md`（报表用法与口径）
+- 测试：`scripts/test-audit-extension.mjs` 离线 mock 覆盖 9 组场景 —— 脱敏、100KB 参数截断、
+  异常吞掉且每类只报一次、追加不覆盖、16/60 个 skill 时不爆 8192 且 `filePath` 不被切断、
+  总开关与配置优先级。不用启动 pi、不用 provider
+- 真机对账：审计侧与 session jsonl 的 `usage` 逐项 **0 差**（pi 0.86.1）
+
 ## v1.7.2
 - **修发版脚本的误提交**：v1.7.1 用的 `git add -A` 把工作区里 pi 正在开发的
   `extensions/audit-log.ts`（534 行）和 `scripts/test-audit-extension.mjs`（275 行）一起提交推了出去。
