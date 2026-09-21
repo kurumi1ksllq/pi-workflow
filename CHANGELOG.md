@@ -1,5 +1,11 @@
 # 变更记录
 
+## v1.7.1
+- 团队清单里的 ponytail 改钉**发布 tag** `v4.10.0`（原来钉的是它 main 上那个 release 提交；
+  两者内容一致，bin 一样，但 tag 更好读、更好升级）
+- ONBOARDING 补一句前提：共享设置里的 `subagents` 模型名指向团队网关，不走网关的人把那几项删掉/换掉
+- `docs/audit-log-spec.md` 移出仓库并加进 `.gitignore`（给 pi 的本地需求书，不进公开仓库；本地文件保留）
+
 ## v1.7.0
 - 团队包现在同步**三类东西**，不再只有第三方包清单：
   - **扩展清单**（`team/packages.json`）：补齐到 8 个第三方包 + ponytail，全部钉版本/commit

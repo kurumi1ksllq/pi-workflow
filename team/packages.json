@@ -9,6 +9,6 @@
     "npm:pi-simplify@0.2.3",
     "npm:pi-lens@4.2.1",
     "npm:pi-subagents@0.70.0",
-    "git:github.com/DietrichGebert/ponytail@e3ba2aa6f1e6f0bc4d69eb09c9f0d0a93af56156"
+    "git:github.com/DietrichGebert/ponytail@v4.10.0"
   ]
 }

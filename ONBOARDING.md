@@ -28,7 +28,7 @@ export DEEPSEEK_API_KEY=...
 ## 3. 装团队基线（**全局**，一次装完所有项目通用）
 
 ```bash
-pi install git:github.com/kurumi1ksllq/pi-workflow@v1.7.0
+pi install git:github.com/kurumi1ksllq/pi-workflow@v1.7.1
 ```
 
 **注意没有 `-l`。** 这是全局安装，装到 `~/.pi/agent/`，
@@ -81,9 +81,9 @@ pi
 - 在 pi 里问「团队基线是哪一版」
 - 敲 `/team-baseline` 看自检报告（只在交互模式有输出）：清单同步、共享设置、扩展配置各补了什么都会列出来
 - `Ctrl+O` 展开完整启动信息
-- `pi list` 的 **User packages** 里应含 `pi-workflow@v1.7.0` 与清单里的那些包，且每项都带安装路径
+- `pi list` 的 **User packages** 里应含 `pi-workflow@v1.7.1` 与清单里的那些包，且每项都带安装路径
 
-**没生效就按顺序查**：第 2 步的凭据配了吗 → `pi list` 里有 `pi-workflow@v1.7.0` 吗
+**没生效就按顺序查**：第 2 步的凭据配了吗 → `pi list` 里有 `pi-workflow@v1.7.1` 吗
 
 ## 你会自动获得什么
 
@@ -98,13 +98,18 @@ pi
 | rtk 命令压缩 | 同上，扩展顺手把缺的 `rtk` 二进制补到 PATH 里的目录 |
 | MCP 基线 | 在已接入基线的项目里自动补 `.mcp.json` |
 
+> ⚠️ **前提**：上面「共享的扩展设置」里的 `subagents` 模型路由用的是**团队网关的模型名**
+> （`z-ai/glm-5.3-flash`、`gpt-5.6-sol`）。你要是不走团队网关（比如用自己买的 API），
+> 那几个模型名对你无效 —— 把这几项从自己的 `~/.pi/agent/settings.json` 里删掉，或换成你自己的模型。
+> 扩展不会把它们补回来：共享设置是**只补缺**，你设过的（甚至故意留空的处理方式）它都不动。
+
 ## 从 v1.6.x 升到 v1.7.x
 
 这一版起，基线还会往你的全局设置里补**团队共享设置**（`subagents` / `compaction`）和
 **扩展默认配置**。都是"只补缺"：你已经设过的键、你调过的扩展配置，一律不动。
 
 ```bash
-pi install git:github.com/kurumi1ksllq/pi-workflow@v1.7.0   # 1. 换版本
+pi install git:github.com/kurumi1ksllq/pi-workflow@v1.7.1   # 1. 换版本
 pi                                                           # 2. 启动：提示补了什么
 pi                                                           # 3. 再启动一次：新清单里的包装上
 ```
@@ -115,7 +120,7 @@ pi                                                           # 3. 再启动一�
 
 ```bash
 pi remove npm:pi-rtk-optimizer          # 1. 清掉旧版清单遗留的那个扩展（如果它在你设置里）
-pi install git:github.com/kurumi1ksllq/pi-workflow@v1.7.0   # 2. 换版本
+pi install git:github.com/kurumi1ksllq/pi-workflow@v1.7.1   # 2. 换版本
 pi                                       # 3. 启动：扩展补 rtk + 重写清单
 pi                                       # 4. 再启动一次：清单里的包才装上
 ```
@@ -132,7 +137,7 @@ pi                                       # 4. 再启动一次：清单里的包�
 团队清单里的包都钉了版本，正常情况下这个提示不该出现。出现了说明你手上那份清单是旧的：
 
 ```bash
-pi install git:github.com/kurumi1ksllq/pi-workflow@v1.7.0   # 1. 换到钉版本的清单
+pi install git:github.com/kurumi1ksllq/pi-workflow@v1.7.1   # 1. 换到钉版本的清单
 pi                                                           # 2. 启动：扩展把不带版本的旧条目换成钉版本
 pi                                                           # 3. 再启动一次：按钉的版本装齐
 ```

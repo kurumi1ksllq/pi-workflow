@@ -1,1 +1,4 @@
 node_modules/
+
+# 给 pi 的本地需求书，不进公开仓库
+docs/audit-log-spec.md
