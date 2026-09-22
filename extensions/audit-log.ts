@@ -41,6 +41,10 @@ let turnCalls = 0;
 let turnErrors = 0;
 let lastStopReason: string | null = null;
 let runTokens = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0, totalTokens: 0 };
+// 阶段 3：本轮的上下文构成。三个事件各给一部分（实测顺序 context -> before_provider_request
+// -> turn_end），在 turn_end 一次性落一条 context_sample，避免记录分片。
+let pendingSections: Record<string, number> | null = null;
+let pendingSample: Record<string, unknown> | null = null;
 let pendingTruncated = false;
 let cachedConfig: { enabled: boolean; maxFieldChars: number; recordFullPrompt: boolean } | null = null;
 
@@ -504,6 +508,70 @@ function buildConfig(event: any, ctx: any): Record<string, unknown> {
 	};
 }
 
+// —— 阶段 3：上下文构成（固定税 vs 增长）——
+//
+// 绝不落盘的内容（改了就是泄密，离线测试有断言守着）：
+//   payload.messages[].content 正文 / payload.tools[].function 正文 / system prompt 正文 /
+//   prompt_cache_key 的值（只记有没有）/ sections 的正文（只记长度）。
+// 这里所有取值都只走 `.length` 或 `Object.keys()`，正文本身一次都不进记录。
+
+/** `context` 事件里的 `messages[0].sections` 是 `{段名: 正文}`，只留每段的字符数。 */
+function sectionsChars(event: any): { sections: Record<string, number>; total: number } | null {
+	const first = Array.isArray(event?.messages) ? event.messages[0] : null;
+	const sec = first?.sections;
+	if (!sec || typeof sec !== "object") return null;
+	const sections: Record<string, number> = {};
+	let total = 0;
+	for (const [name, body] of Object.entries(sec)) {
+		const len = typeof body === "string" ? body.length : safeStringify(body).length;
+		sections[name] = len;
+		total += len;
+	}
+	return { sections, total };
+}
+
+/** 请求体里 messages 的字符数，按 role 分。
+ *  量的是「该消息在请求体里的 JSON 序列化长度」——统一尺度，各 role 可比。 */
+function messagesByRole(payload: any): { count: number; charsByRole: Record<string, number> } | null {
+	const msgs = payload?.messages;
+	if (!Array.isArray(msgs)) return null;
+	const charsByRole: Record<string, number> = {};
+	for (const m of msgs) {
+		const role = typeof m?.role === "string" ? m.role : "unknown";
+		charsByRole[role] = (charsByRole[role] ?? 0) + safeStringify(m).length;
+	}
+	return { count: msgs.length, charsByRole };
+}
+
+/** `before_provider_request` 拿到真实请求体：工具定义与 messages 都在这里，正文只量长度。 */
+function buildContextSample(event: any): Record<string, unknown> {
+	const payload = event?.payload;
+	const tools = Array.isArray(payload?.tools) ? payload.tools : null;
+	const msgs = messagesByRole(payload);
+	return {
+		toolDefs: tools ? { count: tools.length, chars: safeStringify(tools).length } : null,
+		messages: msgs,
+		payloadModel: typeof payload?.model === "string" ? payload.model : null,
+		maxCompletionTokens: typeof payload?.max_completion_tokens === "number" ? payload.max_completion_tokens : null,
+		hasPromptCacheKey: payload?.prompt_cache_key != null,
+	};
+}
+
+/** `turn_end` 时 `getContextUsage()` 才是本轮的真值（之前会拿到上一轮）。任何缺失都写 null。 */
+function contextUsageFields(ctx: any): Record<string, unknown> {
+	try {
+		const u = ctx?.getContextUsage?.();
+		return {
+			contextTokens: typeof u?.tokens === "number" ? u.tokens : null,
+			contextWindow: typeof u?.contextWindow === "number" ? u.contextWindow : null,
+			contextPercent: typeof u?.percent === "number" ? u.percent : null,
+		};
+	} catch (err) {
+		reportOnce("context-usage", err);
+		return { contextTokens: null, contextWindow: null, contextPercent: null };
+	}
+}
+
 // —— 扩展本体 ——
 
 export default function (pi: ExtensionAPI): void {
@@ -583,6 +651,19 @@ export default function (pi: ExtensionAPI): void {
 		});
 	}));
 
+	// 阶段 3：`turn_start` 早于 `context`（真机实测），sections 在这里拿；先存着，等 turn_end 一起落。
+	// 先置 null 再赋值：本轮没采到就写 null。不能用 `if (sec)`（采不到时沿用上一轮值冒充本轮），
+	// 也不能只依赖 turn_end 的 finally —— 若整轮被中断、turn_end 没触发，上一轮的值会漂到本轮。
+	pi.on("context", guard("context", (event) => {
+		pendingSections = null;
+		pendingSections = sectionsChars(event);
+	}));
+
+	pi.on("before_provider_request", guard("before_provider_request", (event) => {
+		pendingSample = null;
+		pendingSample = buildContextSample(event);
+	}));
+
 	pi.on("turn_start", guard("turn_start", (event, ctx) => {
 		currentTurnIndex = typeof event?.turnIndex === "number" ? event.turnIndex : currentTurnIndex + 1;
 		turnCalls = 0;
@@ -660,12 +741,28 @@ export default function (pi: ExtensionAPI): void {
 	}));
 
 	pi.on("turn_end", guard("turn_end", (event, ctx) => {
+		const turnIndex = typeof event?.turnIndex === "number" ? event.turnIndex : currentTurnIndex;
 		write("turn_end", ctx, {
-			turnIndex: typeof event?.turnIndex === "number" ? event.turnIndex : currentTurnIndex,
+			turnIndex,
 			toolCalls: turnCalls,
 			toolErrors: turnErrors,
 			lastStopReason,
 		});
+		// 阶段 3：本轮上下文构成。此时 sections（context）与 toolDefs（before_provider_request）
+		// 都已采集，且 getContextUsage() 已反映出本轮真实用量（turn_end 之前取会拿到上一轮的）。
+		// try/finally：write() 自身已吞异常，但若将来改动引入抛出，finally 保证 stash 不残留到下一轮。
+		try {
+			write("context_sample", ctx, {
+				turnIndex,
+				sections: pendingSections?.sections ?? null,
+				sectionsTotalChars: pendingSections?.total ?? null,
+				...(pendingSample ?? {}),
+				...contextUsageFields(ctx),
+			});
+		} finally {
+			pendingSections = null;
+			pendingSample = null;
+		}
 	}));
 
 	pi.on("agent_end", guard("agent_end", (event, ctx) => {

@@ -78,6 +78,7 @@ pi 自动发现 `agentDir/extensions/` 下的直接 `.ts`/`.js` 文件，不用�
 | `tool_result` | `tool_execution_end` | `toolName`、`toolCallId`、`isError`、`durationMs`、`resultChars`、`resultSha256` |
 | `assistant_usage` | `message_end`（role=assistant） | `usage{input,cacheRead,cacheWrite,output,reasoning,totalTokens}`、`cost`、`stopReason`、`hasThinking`、`thinkingChars`、`textChars` |
 | `turn_end` | `turn_end` | `turnIndex`、`toolCalls`、`toolErrors`、`lastStopReason` |
+| `context_sample` | `turn_end`（阶段 3，每轮一条） | `turnIndex`、`sections{}`、`sectionsTotalChars`、`toolDefs{count,chars}`、`messages{count,charsByRole}`、`payloadModel`、`maxCompletionTokens`、`hasPromptCacheKey`、`contextTokens`、`contextWindow`、`contextPercent` |
 | `agent_end` | `agent_end` | `messageCount`、`turnTokens`（本 run 累计 usage） |
 | `agent_settled` | `agent_settled` | —— |
 | `compact` | `session_compact` | `reason`、`tokensBefore`、`summaryChars`、`fromExtension`、`willRetry` |
@@ -129,6 +130,48 @@ pi 自动发现 `agentDir/extensions/` 下的直接 `.ts`/`.js` 文件，不用�
 即：**config 是从 skill 描述的预算里抠出来的**——描述压到 0（`descriptionChars: 0`），
 保住了全部 skill 条目与 `filePath`（对账依赖它）。描述本身无消费方（报表不读），
 真需要时用 `filePath` 去 SKILL.md 拿。容量阶梯仍走 §2，config 与 skills 在**同一次 `finishRecord()` 里一起量**。
+
+### 4.3 `context_sample`：上下文构成（阶段 3）
+
+每轮一条（挂在 `turn_end`）。回答「每轮 input 里固定税 / 历史 / 工具回灌各占多少」——
+这是 cacheRead 占 95% 的机理所在。
+
+**为什么挂在 `turn_end` 而不是 `context`**：三个事件各给一部分，但 `context` 与
+`before_provider_request` 都不带 `turnIndex`，而且 `getContextUsage()` 在 `turn_end` 之前取到的是**上一轮**的值。
+所以：`context` 时 stash `sections`、`before_provider_request` 时 stash 请求体摘要、
+`turn_end` 时（usage 已刷新）一次性落一条，避免记录分片。**真机探针实测顺序**：
+`turn_start` → `context` → `before_provider_request` → `message_end`(assistant_usage) → `turn_end`。
+（`turn_start` 早于 `context`；早期文档曾把两者写反，导致「`turn_start` 清空 stash 会抹掉刚采到的数据」的误判。）
+
+**stash 只用「先置 null 再赋值」**：两个采集点都写成 `pendingSections = null;`
+再 `pendingSections = sectionsChars(event);` —— **不用 `if (sec)` 条件赋值**。
+因为本轮采不到时条件赋值会沿用**上一轮**的值冒充本轮真值；而唯一的实际触发路径是
+「上一轮被中断、没跑到 `turn_end`」（正常路径 `turn_end` 的 `finally` 会清空）。
+`turn_end` 侧用 `try/finally` 保证清空，不依赖 `write()` 不抛异常。
+
+| 字段 | 内容 | 取数来源 |
+| --- | --- | --- |
+| `turnIndex` | 第几轮 | `turn_end.turnIndex` |
+| `sections` | `{段名: 字符数}`，如 `preamble/tools/rules/docs/project_context/skills/cwd` | `context.messages[0].sections` 各值 `.length` |
+| `sectionsTotalChars` | 上面各段之和 | 同上 |
+| `toolDefs` | `{count, chars}`，工具定义（每轮都发） | `before_provider_request.payload.tools` 的条数与序列化长度 |
+| `messages` | `{count, charsByRole}`，按 role 分字符 | 同上 `payload.messages`，每条的序列化长度 |
+| `payloadModel` | 请求体里的 model | `payload.model` |
+| `maxCompletionTokens` | 输出上限 | `payload.max_completion_tokens` |
+| `hasPromptCacheKey` | **只记有没有**（不记值） | `payload.prompt_cache_key != null` |
+| `contextTokens` / `contextWindow` / `contextPercent` | 本轮上下文用量 | `ctx.getContextUsage()`，**在 `turn_end` 取** |
+
+**绝对不落盘**（代码里有注释、离线测试场景 11 有断言守着）：
+`payload.messages[].content`、`payload.tools[].function`、system prompt 正文、
+`prompt_cache_key` 的值、`sections` 的正文。所有取值只走 `.length` 或 `Object.keys()`。
+
+**实测（2026-09-22，`pi 0.86.1`，本机 5 轮 `pi -p`）**：`sectionsTotalChars` 恒为 **14,713**
+（`skills` 8845 最大）、`toolDefs` 恒为 **16 个 / 38,308 字符**、`messages.count` 2→4→6→8→10。
+
+> ⚠️ **`sections` 合计 ≠ 真实 system prompt 长度**。实测真实 system content = **22,455**，
+> `sections` 合计只有 14,713，差 7,742——**扩展注入的正文不进 `sections`**
+> （团队基线规范 ~6,393 字符、`<tools>` 工具列表 ~5,078 字符）。报表的「固定税」按 spec 口径
+> 取 `sections + toolDefs`，所以这是**下限估计**，不是 system prompt 的精确尺寸。
 
 ## 5. 脱敏
 
@@ -235,3 +278,5 @@ pi -p "跑一次 echo hello,然后用一句话说明结果" --approve
 - **绝不抛异常**：所有 handler 用 `guard()` 包住，异常写 stderr（每类错误只报一次），不允许中断 agent 循环
 - **绝不阻塞**：只做 `appendFileSync` 级别的写；不统计、不聚合、不做慢 IO
 - **不依赖 `sessionManager` 之外的非公开 API**：用不到的信息写 `null`，不瞎猜
+- **`context_sample` 只落尺寸**（阶段 3）：`sections` / `toolDefs` / `messages` 都只走 `.length`，
+  prompt / 工具定义 / 用户输入 / `prompt_cache_key` 的**正文与值一次都不进记录**。离线测试场景 11 有哨兵串断言。

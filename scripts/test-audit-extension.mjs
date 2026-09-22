@@ -12,6 +12,8 @@
 //   7. 同一天跑两次 → 追加不覆盖，行数累加
 //   8. skill 多 / sessionFile 深时 session 行不爆 8192，filePath 不被切断
 //   9. 总开关：<agent dir>/extensions/audit-log/config.json 写 enabled:false → 一条都不写；用户目录优先于扩展同级目录
+//  10. 阶段 2：session 事件的 config 指纹（同配置相同、改配置变、只记名称/尺寸/哈希）
+//  11. 阶段 3：context_sample 事件（sections/toolDefs/messages 只记长度，不落任何正文；开关仍生效）
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -524,6 +526,157 @@ await handlers2.tool_execution_start({ type: "tool_execution_start", toolCallId:
 	}
 
 	console.log("config 指纹：", cfg.fingerprint, "→", changed.map(([w, f]) => `${w}=${f}`).join(" / "));
+}
+
+// —— 场景 11：阶段 3 —— context_sample（上下文构成）——
+// 红线：sections/tool function/system prompt/user content 的**正文**一概不落盘，只落长度。
+// 事件顺序（真机探针实测）：turn_start → context → before_provider_request → turn_end。
+// 一条样本在 turn_end 落，sections 与 toolDefs 都已 stash。
+{
+	const SECRET_SECTION = "SECTION-BODY-MUST-NOT-BE-LOGGED";
+	const SECRET_TOOLFN = "TOOL-FUNCTION-BODY-MUST-NOT-BE-LOGGED";
+	const SECRET_USER = "USER-MESSAGE-BODY-MUST-NOT-BE-LOGGED";
+
+	const mkTurn = async (turnIndex, usage) => {
+		const h = await loadFresh();
+		const usageCtx = { ...ctx, getContextUsage: () => usage };
+		// 真机实测顺序（扩展探针）：turn_start → context → before_provider_request → turn_end。
+		// 这里必须照抄，否则测不出 turn_start 清空 stash 与 context 采集的相互作用。
+		await h.turn_start({ type: "turn_start", turnIndex }, usageCtx);
+		await h.context({
+			type: "context",
+			messages: [
+				{
+					role: "system",
+					content: "",
+					sections: { preamble: "p".repeat(169), rules: SECRET_SECTION, skills: "s".repeat(8845) },
+				},
+			],
+		}, usageCtx);
+		await h.before_provider_request({
+			type: "before_provider_request",
+			payload: {
+				model: "deepseek/deepseek-v4.1-flash",
+				max_completion_tokens: 32000,
+				prompt_cache_key: undefined, // 只记有没有，不记值
+				tools: [
+					{ type: "function", function: { name: "read", description: SECRET_TOOLFN } },
+					{ type: "function", function: { name: "bash", description: SECRET_TOOLFN } },
+				],
+				messages: [
+					{ role: "system", content: SECRET_SECTION },
+					{ role: "user", content: [{ type: "text", text: SECRET_USER }] },
+				],
+			},
+		}, usageCtx);
+		await h.turn_end({ type: "turn_end", turnIndex, message: {}, toolResults: [] }, usageCtx);
+		const line = readLines().findLast((l) => JSON.parse(l).event === "context_sample");
+		return { rec: JSON.parse(line), line };
+	};
+
+	const t0 = await mkTurn(0, { tokens: 16188, contextWindow: 128000, percent: 12.646875 });
+	const cs = t0.rec;
+	check(cs?.turnIndex === 0, `context_sample.turnIndex 不对：${cs?.turnIndex}（场景 11）`);
+	// sections：只留长度，且合计 = 各段之和
+	check(cs?.sections?.preamble === 169, `sections.preamble 应为 169：${cs?.sections?.preamble}（场景 11）`);
+	check(cs?.sections?.skills === 8845, `sections.skills 应为 8845：${cs?.sections?.skills}（场景 11）`);
+	check(
+		cs?.sectionsTotalChars === 169 + SECRET_SECTION.length + 8845,
+		`sectionsTotalChars 与各段之和不符：${cs?.sectionsTotalChars}（场景 11）`,
+	);
+	check(typeof cs?.sections?.rules === "number", "sections 的值应该是数字（长度），不是正文（场景 11）");
+	// toolDefs：个数 + 序列化长度
+	check(cs?.toolDefs?.count === 2, `toolDefs.count 不对：${cs?.toolDefs?.count}（场景 11）`);
+	check(typeof cs?.toolDefs?.chars === "number" && cs.toolDefs.chars > 0, "toolDefs.chars 应为正数（场景 11）");
+	// messages：条数 + 按 role 分字符
+	check(cs?.messages?.count === 2, `messages.count 不对：${cs?.messages?.count}（场景 11）`);
+	check(
+		cs?.messages?.charsByRole?.system > 0 && cs?.messages?.charsByRole?.user > 0,
+		`messages.charsByRole 缺 role：${JSON.stringify(cs?.messages?.charsByRole)}（场景 11）`,
+	);
+	check(cs?.payloadModel === "deepseek/deepseek-v4.1-flash", `payloadModel 不对：${cs?.payloadModel}（场景 11）`);
+	check(cs?.maxCompletionTokens === 32000, `maxCompletionTokens 不对：${cs?.maxCompletionTokens}（场景 11）`);
+	check(cs?.hasPromptCacheKey === false, `hasPromptCacheKey 应为 false：${cs?.hasPromptCacheKey}（场景 11）`);
+	check(cs?.contextTokens === 16188 && cs?.contextWindow === 128000, `contextTokens/Window 不对（场景 11）`);
+	check(typeof cs?.contextPercent === "number", "contextPercent 应为数字（场景 11）");
+
+	// 验收 4：日志文件里搜不到任何正文
+	const raw11 = readLines().join("\n");
+	check(!raw11.includes(SECRET_SECTION), "日志里出现 sections 正文（场景 11）");
+	check(!raw11.includes(SECRET_TOOLFN), "日志里出现工具定义正文（场景 11）");
+	check(!raw11.includes(SECRET_USER), "日志里出现用户输入正文（场景 11）");
+	check(!raw11.includes("p".repeat(100)), "日志里出现 sections 长正文片段（场景 11）");
+
+	// 验收 5：单行 ≤ 8192
+	check(Buffer.byteLength(t0.line, "utf8") <= 8192, `context_sample 行超了：${Buffer.byteLength(t0.line, "utf8")}（场景 11）`);
+	check(t0.rec.truncated !== true, "context_sample 不该靠兜底截断（场景 11）");
+
+	// 第二轮：messages 增长，sections 不变
+	const t1 = await mkTurn(1, { tokens: 16252, contextWindow: 128000, percent: 12.696875 });
+	check(t1.rec?.turnIndex === 1, `第二轮 turnIndex 不对：${t1.rec?.turnIndex}（场景 11）`);
+	check(
+		t1.rec?.sectionsTotalChars === cs.sectionsTotalChars,
+		`sections 每轮应完全相同：${cs.sectionsTotalChars} vs ${t1.rec?.sectionsTotalChars}（场景 11）`,
+	);
+
+	// 缺数据不崩：payload 里没 tools / 没 sections → 相应字段 null，仍写出记录
+	{
+		const h = await loadFresh();
+		const usageCtx = { ...ctx, getContextUsage: () => ({ tokens: null, contextWindow: null, percent: null }) };
+		await h.turn_start({ type: "turn_start", turnIndex: 0 }, usageCtx);
+		await h.before_provider_request({ type: "before_provider_request", payload: { messages: [] } }, usageCtx);
+		const before11 = readLines().length;
+		await h.turn_end({ type: "turn_end", turnIndex: 0 }, usageCtx);
+		check(readLines().length === before11 + 2, "缺数据时 context_sample 没写出来（场景 11）");
+		const rec = readLines().map((l) => JSON.parse(l)).findLast((r) => r.event === "context_sample");
+		check(rec?.toolDefs === null, `缺 tools 时 toolDefs 应为 null：${JSON.stringify(rec?.toolDefs)}（场景 11）`);
+		check(rec?.sections === null && rec?.sectionsTotalChars === null, "缺 sections 时应写 null，不是编造（场景 11）");
+		check(rec?.contextTokens === null, "getContextUsage 给 null 时应如实写 null（场景 11）");
+	}
+
+	// 陈旧 stash：上一轮采到了 sections 但**整轮被中断（没跑到 turn_end）**，
+	// 下一轮 context 也不带 sections → 必须写 null，不能把上一轮的值漂过来。
+	// 「先置 null 再赋值」的回归守卫：用 `if (sec)` 条件赋值时这个断言会失败。
+	{
+		const h = await loadFresh();
+		const usageCtx = { ...ctx, getContextUsage: () => ({ tokens: 1, contextWindow: 2, percent: 3 }) };
+
+		// 轮 0：采到 sections，但**故意不调 turn_end**（模拟中断）
+		await h.turn_start({ type: "turn_start", turnIndex: 0 }, usageCtx);
+		await h.context({
+			type: "context",
+			messages: [{ role: "system", content: "", sections: { preamble: "p".repeat(169) } }],
+		}, usageCtx);
+		await h.before_provider_request({ type: "before_provider_request", payload: { messages: [] } }, usageCtx);
+
+		// 轮 1：context 不带 sections
+		await h.turn_start({ type: "turn_start", turnIndex: 1 }, usageCtx);
+		await h.context({ type: "context", messages: [{ role: "system", content: "" }] }, usageCtx);
+		await h.before_provider_request({ type: "before_provider_request", payload: { messages: [] } }, usageCtx);
+		await h.turn_end({ type: "turn_end", turnIndex: 1 }, usageCtx);
+
+		const rec = readLines().map((l) => JSON.parse(l)).findLast((r) => r.event === "context_sample");
+		check(rec?.turnIndex === 1, `应拿到轮 1 的样本：turnIndex=${rec?.turnIndex}（场景 11）`);
+		check(
+			rec?.sections === null && rec?.sectionsTotalChars === null,
+			`轮 0 中断后轮 1 没采到 sections，必须写 null 而不是沿用轮 0 的值：${JSON.stringify(rec?.sections)}（场景 11）`,
+		);
+		check(rec?.toolDefs === null, `轮 1 没采到 tools，必须写 null：${JSON.stringify(rec?.toolDefs)}（场景 11）`);
+	}
+
+	// 总开关：enabled:false 时 context_sample 也不许写（走同一个 emit 出口）
+	{
+		const dir = path.join(process.env.PI_CODING_AGENT_DIR, "extensions", "audit-log");
+		fs.mkdirSync(dir, { recursive: true });
+		const cfgFile = path.join(dir, "config.json");
+		fs.writeFileSync(cfgFile, JSON.stringify({ enabled: false }), "utf8");
+		const beforeOff = readLines().length;
+		await mkTurn(0, { tokens: 1, contextWindow: 2, percent: 3 });
+		check(readLines().length === beforeOff, `enabled:false 时 context_sample 仍被写出（${beforeOff} -> ${readLines().length}）（场景 11）`);
+		fs.rmSync(cfgFile, { force: true });
+	}
+
+	console.log("context_sample（轮 0）：", JSON.stringify({ sections: cs?.sections, toolDefs: cs?.toolDefs, messages: cs?.messages, contextTokens: cs?.contextTokens }));
 }
 
 // —— 红线：不许改写会话 ——
