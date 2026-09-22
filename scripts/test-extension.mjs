@@ -85,6 +85,12 @@ check(fs.readFileSync(settingsFile, "utf-8") === before2, "第二次运行不该
 const injected = await handlers.before_agent_start({ systemPrompt: "BASE" });
 check(injected?.systemPrompt?.includes("团队基线规范"), "before_agent_start 没注入规范");
 check(/pi-workflow v[\d.]+/.test(injected?.systemPrompt ?? ""), "注入段没有版本号");
+// 安全红线里「按命令行过滤杀进程」这条是防「agent 自己把 pi 杀掉」的唯一闸门，
+// 内容被误删时这里必须红 —— 别改成只查标题。
+check(
+	injected?.systemPrompt?.includes("不要按进程名杀 node"),
+	"注入段缺了「不要按进程名杀 node」这条红线",
+);
 
 // —— 场景 4：版本标识以设置里钉的 ref 为准 ——
 const versioned = readSettings();

@@ -42,6 +42,15 @@
 - 密钥、token、连接串一律不进仓库，用环境变量
 - `.env` 永不进 git
 - 破坏性操作（删文件、强制推送、改 schema、drop 表）先确认再动手
+- **不要按进程名杀 node**：pi 自己就是 `node.exe`，`Get-Process node | Stop-Process -Force`、
+  `taskkill /IM node.exe /F` 会把宿主 pi 一起杀掉 —— 无报错、无崩溃记录、进程静默消失。
+  清理残留子进程一律按命令行特征过滤：
+
+  ```powershell
+  Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
+    Where-Object { $_.CommandLine -like '*<项目特征>*' } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+  ```
 
 ## 交付
 

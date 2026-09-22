@@ -1,5 +1,16 @@
 # 变更记录
 
+## v1.13.0
+- **`team/RULES.md` 安全红线新增一条：不要按进程名杀 node**。pi 自身就是 `node.exe`
+  （npm shim 跑 `dist/bundle/cli.js`），所以 `Get-Process node | Stop-Process -Force`、
+  `taskkill /IM node.exe /F` 会把**宿主 pi 一起杀掉** —— 无报错、无崩溃记录、TUI 定格、进程静默消失，
+  看起来就像「pi 突然没了」，和 pi-lens 的 ENOSYS（会写 `crashes.json`、会打
+  `pi exiting due to uncaughtException`）完全是两条路，容易误诊。起因是成员机器上 agent 自己写出的
+  「先杀干净再跑」回归扫描命令把自己带走了。清理残留子进程改按命令行特征过滤
+  （`Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like '*特征*' }`）。
+- **`scripts/test-extension.mjs` 加一条断言**：注入段必须包含这条红线，被误删时测试变红。
+  负向验证过（抽掉该句 → 测试 exit 1；还原 → 全绿）。
+
 ## v1.12.0
 - **修一个会静默烧光免费档的默认值坑（`defaultModel` 写成了 `provider/id` 形式）**。
   现象：全团队默认会话实际跑在 `tier-free` 上，一天把 2 个账户的免费额度（每账户每天 **100 次请求**）打满，
