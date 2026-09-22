@@ -117,7 +117,7 @@ git 源同样要钉：是 tag 就写 `@v1.2.3`，只有主干可跟就写完整 
   "compaction": { "enabled": true, "reserveTokens": 32768, "keepRecentTokens": 20000 },
   "subagents": {
     "disableThinking": true,
-    "agentOverrides": { "oracle": { "model": "gpt-5.6-sol" } }
+    "agentOverrides": { "oracle": { "model": "tier-max" } }
   }
 }
 ```

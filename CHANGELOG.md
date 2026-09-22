@@ -1,5 +1,16 @@
 # 变更记录
 
+## v1.10.0
+- **subagents 模型路由改用网关档位别名**：`team/agent-settings.json` 里 `reviewer` / `researcher` / `oracle`
+  的目标模型从真实模型名（`z-ai/glm-5.3-flash`、`gpt-5.6-sol`）改成档位别名（`tier-power`、`tier-max`）。
+  原因：网关侧已把真实模型名从渠道 `models` 里移除（请求真实名现在返回 403/503），
+  旧版模板给成员写进去的配置**是坏的**；同时档位别名让网关换后端模型时团队侧零改动。
+- **新增一次性迁移 `migrateStaleModels()`**（`team-baseline` 扩展）：`mergeMissing` 是「只补缺」，
+  永远不会改掉成员机器上已写入的旧真实模型名 —— 那些值正好在已知旧名表里才改写，成员自己填的模型一律不动。
+  迁移幂等（第二次启动不再改动设置），随 `syncAgentSettings()` 一起跑，复用原有的「重启 pi 生效」提示。
+- 文档同步：`ONBOARDING.md` 的「前提」段、`docs/extensions.md` 的共享设置示例改成档位别名。
+- 测试：`scripts/test-extension.mjs` 加场景 9（旧真实名被迁移 + 成员自填模型不被碰 + 迁移幂等），9 个场景全绿。
+
 ## v1.9.0
 - **自动更新：装一次就自动跟远端最新 tag**（维护者只管 `release.sh` 打 tag + push，成员零动作）。
   `team-baseline` 扩展每次启动（默认 1 小时最多查一次远端）比对远端最新 `vX.Y.Z` tag 与包目录的 HEAD，

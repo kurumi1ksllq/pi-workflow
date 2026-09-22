@@ -340,6 +340,40 @@ function syncPackagesManifest(projectDir: string): PkgSync {
 type SettingsSync = "merged" | "none" | "error";
 
 /**
+ * 已知的「过期真实模型名 → 档位别名」迁移表。
+ *
+ * 背景：早期版本的 team/agent-settings.json 直接写真实模型名（`z-ai/glm-5.3-flash` 等）。
+ * 网关改成档位别名后那些名字不再有可用渠道，已装旧版的成员会拿到一个**报 403 的**
+ * reviewer/researcher 配置 —— 而 mergeMissing 是「只补缺」，永远不会把它改掉。
+ *
+ * 所以这里做一次定向迁移：**只有当前值正好等于表中的旧名时才改写**。
+ * 成员自己填的模型（`my-own/reviewer-model`）不匹配任何旧名，一律不动。
+ */
+const STALE_MODEL_MAP: Record<string, string> = {
+	"z-ai/glm-5.3-flash": "tier-power",
+	"gpt-5.6-sol": "tier-max",
+	"deepseek/deepseek-v4.1-flash": "tier-std",
+	"inclusionai/ling-3.0-flash-sante:free": "tier-free",
+};
+
+/** 走一遍 settings.subagents.agentOverrides，把撞上旧名的 model 换成档位别名。 */
+function migrateStaleModels(settings: any): boolean {
+	const overrides = settings?.subagents?.agentOverrides;
+	if (!overrides || typeof overrides !== "object" || Array.isArray(overrides)) return false;
+	let changed = false;
+	for (const name of Object.keys(overrides)) {
+		const entry = overrides[name];
+		if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+		const mapped = STALE_MODEL_MAP[entry.model];
+		if (mapped) {
+			entry.model = mapped;
+			changed = true;
+		}
+	}
+	return changed;
+}
+
+/**
  * 深合并：**只补缺**。成员自己设过的键一律不动，也从不删键。
  * 数组整体当一个值（合并数组只会制造意外）；以 `_` 开头的键是给人看的说明，不写进设置。
  */
@@ -392,7 +426,10 @@ function syncAgentSettings(): SettingsSync {
 			return "error";
 		}
 	}
-	if (!mergeMissing(settings, patch)) return "none";
+	const filled = mergeMissing(settings, patch);
+	// 顺序有意：先补缺（新缺的键写进去的就是档位别名），再迁移成员本地残留的旧真实模型名。
+	const migrated = migrateStaleModels(settings);
+	if (!filled && !migrated) return "none";
 	try {
 		fs.mkdirSync(path.dirname(file), { recursive: true });
 		fs.writeFileSync(file, JSON.stringify(settings, null, 2) + "\n", "utf-8");

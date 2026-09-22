@@ -155,12 +155,12 @@ check(
 const mod8 = await import(pathToFileURL(EXT).href + "?pure=" + Date.now());
 const { pickLatestTag, compareVersions } = mod8;
 const lsRemote = [
-	"1111111111111111111111111111111111111111\trefs/tags/v1.7.0",
-	"2222222222222222222222222222222222222222\trefs/tags/v1.10.0",
-	"3333333333333333333333333333333333333333\trefs/tags/v1.9.9",
-	"4444444444444444444444444444444444444444\trefs/tags/v2.0.0-rc1",
-	"5555555555555555555555555555555555555555\trefs/heads/main",
-	"6666666666666666666666666666666666666666\trefs/tags/v1.8.0^{}",
+	"1111111111111111111111111111111111111111	refs/tags/v1.7.0",
+	"2222222222222222222222222222222222222222	refs/tags/v1.10.0",
+	"3333333333333333333333333333333333333333	refs/tags/v1.9.9",
+	"4444444444444444444444444444444444444444	refs/tags/v2.0.0-rc1",
+	"5555555555555555555555555555555555555555	refs/heads/main",
+	"6666666666666666666666666666666666666666	refs/tags/v1.8.0^{}",
 	"",
 ].join("\n");
 const latest = pickLatestTag(lsRemote);
@@ -172,7 +172,41 @@ check(latest?.sha === "2222222222222222222222222222222222222222", "最新 tag �
 check(compareVersions("v1.10.0", "v1.9.9") > 0, "compareVersions 把 1.10.0 排到了 1.9.9 后面（场景 8：字符串比较的老毛病）");
 check(compareVersions("v1.8.0", "v1.8.0") === 0, "同版本该返回 0（场景 8）");
 check(pickLatestTag("") === undefined, "空输入不该挑出 tag（场景 8）");
-check(pickLatestTag("abc\trefs/tags/v1.0.0") === undefined, "sha 不合法时不该挑出 tag（场景 8）");
+check(pickLatestTag("abc	refs/tags/v1.0.0") === undefined, "sha 不合法时不该挑出 tag（场景 8）");
+
+// —— 场景 9：老成员设置里残留的真实模型名要被迁移成档位别名 ——
+// 只改「正好等于已知旧名」的值；成员自填的模型必须原样保留。
+fs.rmSync(AGENT, { recursive: true, force: true });
+fs.mkdirSync(AGENT, { recursive: true });
+fs.writeFileSync(
+	settingsFile,
+	JSON.stringify(
+		{
+			subagents: {
+				agentOverrides: {
+					reviewer: { model: "z-ai/glm-5.3-flash" }, // 旧模板写进去的真实名
+					researcher: { model: "z-ai/glm-5.3-flash" },
+					oracle: { model: "gpt-5.6-sol" },
+					scout: { model: "my-own/scout-model" }, // 成员自填的，不能被碰
+				},
+			},
+		},
+		null,
+		2,
+	),
+	"utf-8",
+);
+await load();
+const mig = readSettings().subagents.agentOverrides;
+check(mig.reviewer.model === "tier-power", `旧真实名没迁移成档位别名：${mig.reviewer.model}（场景 9）`);
+check(mig.researcher.model === "tier-power", `researcher 的旧真实名没迁移：${mig.researcher.model}（场景 9）`);
+check(mig.oracle.model === "tier-max", `oracle 的旧真实名没迁移：${mig.oracle.model}（场景 9）`);
+check(mig.scout.model === "my-own/scout-model", `动了成员自填的模型：${mig.scout.model}（场景 9：只迁移已知旧名）`);
+
+// 迁移过之后再跑一次应当是 no-op（幂等）
+const beforeSecond = fs.readFileSync(settingsFile, "utf-8");
+await load();
+check(fs.readFileSync(settingsFile, "utf-8") === beforeSecond, "迁移不幂等：第二次启动又改了设置（场景 9）");
 
 console.log("设置里的 packages：", JSON.stringify(after.packages));
 console.log("注入段版本行：", injected4.systemPrompt.split("\n").find((l) => l.includes("pi-workflow")));
