@@ -61,7 +61,7 @@ try {
   const k = p?.apiKey ?? "";
   process.stdout.write(k.startsWith("$") || k.includes("...") ? "" : k);
 } catch {}
-' "$HOME/.pi/agent/models.json" 2>/dev/null)"
+' "$(cygpath -m "$HOME/.pi/agent/models.json" 2>/dev/null || echo "$HOME/.pi/agent/models.json")" 2>/dev/null)"
 if [ -n "$NEWAPI_KEY" ]; then
   export NEWAPI_API_KEY="$NEWAPI_KEY"
   echo "已导出 NEWAPI_API_KEY（从本机 models.json 取，仅供模拟启动用）"
@@ -133,7 +133,15 @@ try {
   if (!p) { console.log("  （缺 newapi —— 模型配置同步没生效）"); process.exit(0); }
   console.log("  baseUrl:", p.baseUrl);
   console.log("  apiKey :", p.apiKey, "（必须是 $ 环境变量引用，不能是明文 key）");
-  console.log("  档位   :", (p.models || []).map((x) => x.id).join(", ") || "（无）");
+  const ids = (p.models || []).map((x) => x.id);
+  console.log("  档位   :", ids.join(", ") || "（无）");
+  // 列表首位是「defaultModel 解析不到时」的静默回退目标 —— 免费档放首位等于
+  // 默认跑在每账户每天 100 次请求的池子上（2026-09-23 实况：一天烧满 2 个账户）
+  if (ids.length && /free/i.test(ids[0])) {
+    console.log("  ✗ 首位是免费档 —— defaultModel 解析不到时会静默回退到它，必须挪到末尾");
+  } else {
+    console.log("  ✓ 首位不是免费档");
+  }
   const mine = m.providers && m.providers.mine;
   console.log("  成员自建 provider 保留:", mine ? "✓ mine/local-llama" : "✗ 被动了（不该）");
   const bad = Object.keys(m.providers).filter((k) => /^_/.test(k));

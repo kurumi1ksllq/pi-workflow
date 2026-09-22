@@ -1,5 +1,6 @@
 {
   "_说明": "团队模型配置模板 —— 扩展把这个文件里**缺的** provider / 档位补进每个成员的 ~/.pi/agent/models.json。规则：provider 缺就整段补；provider 已在（比如成员自己写过 newapi）则只补它缺的字段 + 追加缺的档位，已有档位定义一律不动；成员自建的东西一律不碰。⚠️ 这个文件进的是**公开**仓库：apiKey 只能写环境变量引用（$XXX）或命令（!cmd），**绝不能写明文 key**。改这里 = 改全团队，发版后成员重启两次生效。",
+  "_档位顺序（别改）": "数组**第一个档位必须是 tier-std**。pi 的 settings.defaultModel 解析不到时会**静默回退到本列表的第一个模型**（不报错）—— 首位放免费档，全员默认就悄悄跑在 tier-free 上，而这个档每账户每天只有 100 次请求，一天就能烧光（2026-09-23 实况：2 个账户 200 次被打满）。免费档放最后，只供显式 `pi -m tier-free` 探测用。",
   "providers": {
     "newapi": {
       "_说明": "团队自建 new-api 网关。成员要自己导出 NEWAPI_API_KEY，或用 pi 的 /login 给这个 provider 存一份 key（auth.json）。档位别名（tier-*）指向网关那边配好的模型，网关换后端模型时这里不用改。",
@@ -8,12 +9,6 @@
       "api": "openai-completions",
       "apiKey": "$NEWAPI_API_KEY",
       "models": [
-        {
-          "id": "tier-free",
-          "name": "档位·免费",
-          "contextWindow": 128000,
-          "maxTokens": 32000
-        },
         {
           "id": "tier-std",
           "name": "档位·标准",
@@ -31,6 +26,12 @@
           "name": "档位·顶配",
           "contextWindow": 272000,
           "maxTokens": 64000
+        },
+        {
+          "id": "tier-free",
+          "name": "档位·免费（仅探测用，每天 100 次/账户）",
+          "contextWindow": 128000,
+          "maxTokens": 32000
         }
       ]
     }

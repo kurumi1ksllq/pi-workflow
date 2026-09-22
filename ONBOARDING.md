@@ -28,7 +28,7 @@ export DEEPSEEK_API_KEY=...
 ## 3. 装团队基线（**全局**，一次装完所有项目通用）
 
 ```bash
-pi install git:github.com/kurumi1ksllq/pi-workflow@v1.11.0
+pi install git:github.com/kurumi1ksllq/pi-workflow@v1.12.0
 ```
 
 **注意没有 `-l`。** 这是全局安装，装到 `~/.pi/agent/`，
@@ -81,9 +81,9 @@ pi
 - 在 pi 里问「团队基线是哪一版」
 - 敲 `/team-baseline` 看自检报告（只在交互模式有输出）：清单同步、共享设置、扩展配置各补了什么都会列出来
 - `Ctrl+O` 展开完整启动信息
-- `pi list` 的 **User packages** 里应含 `pi-workflow@v1.11.0` 与清单里的那些包，且每项都带安装路径
+- `pi list` 的 **User packages** 里应含 `pi-workflow@v1.12.0` 与清单里的那些包，且每项都带安装路径
 
-**没生效就按顺序查**：第 2 步的凭据配了吗 → `pi list` 里有 `pi-workflow@v1.11.0` 吗
+**没生效就按顺序查**：第 2 步的凭据配了吗 → `pi list` 里有 `pi-workflow@v1.12.0` 吗
 
 ## 你会自动获得什么
 
@@ -94,7 +94,7 @@ pi
 | `/review` | 敲它审查当前 diff |
 | 团队统一装的扩展 | 启动时自动补进你的全局设置，重启后生效 |
 | 共享的扩展设置 | `subagents` 模型路由、`compaction` 这些团队一致的设置，扩展**只补缺**地并进你的全局设置 —— 你设过的键不会被覆盖 |
-| 模型配置（网关 + 档位） | 网关地址和四个档位别名（`tier-free` / `tier-std` / `tier-power` / `tier-max`）自动补进你的 `~/.pi/agent/models.json`。**key 不在里面**（`apiKey` 写的是 `$NEWAPI_API_KEY` 引用）—— 你自己导出这个环境变量，或者用 pi 的 `/login` 给 `newapi` 存一份 key。已经有同名 provider 或同名档位就不动你的 |
+| 模型配置（网关 + 档位） | 网关地址和三个常用档位别名（`tier-std` / `tier-power` / `tier-max`）自动补进你的 `~/.pi/agent/models.json`，最后附一个仅供探测的 `tier-free`。**key 不在里面**（`apiKey` 写的是 `$NEWAPI_API_KEY` 引用）—— 你自己导出这个环境变量，或者用 pi 的 `/login` 给 `newapi` 存一份 key。已经有同名 provider 或同名档位就不动你的 |
 | 扩展默认配置 | 像 `pi-rtk-optimizer` 这种把配置放自己目录的扩展，首次启动时从包里补一份默认配置；你调过之后就不动 |
 | rtk 命令压缩 | 同上，扩展顺手把缺的 `rtk` 二进制补到 PATH 里的目录 |
 | MCP 基线 | 在已接入基线的项目里自动补 `.mcp.json` |
@@ -119,7 +119,12 @@ pi
 > 配完敲 `pi --list-models`，应能看到 `newapi` 下的四个 `tier-*`。想默认用某个档位，
 > `~/.pi/agent/settings.json` 里写 `"defaultModel": "tier-std"`（**裸模型 id**，
 > 配合 `"defaultProvider": "newapi"` 消歧）—— 实测写成 `newapi/tier-std` 反而解析不到，
-> 会静默回退到列表里的第一个模型。扩展不碰这两个键，是你自己的选择。
+> 会静默回退到列表里的第一个模型（团队模板已把 `tier-free` 挪到末尾，就是为了不让这种笔误
+> 落到每天只有 100 次请求的免费档上）。基线扩展会帮你把这种笔误改回裸 id，
+> 其余情况不碰这两个键 —— 是你自己的选择。
+>
+> ⚠️ **`tier-free` 只用来做连通性/冒烟探测**：它每账户每天只有 **100 次请求**，一次批量任务就能烧光，
+> 当天剩下的时间整个免费档都不可用。日常干活用 `tier-std`，不要把它设成默认值。
 
 ## 从 v1.6.x 升到 v1.7.x
 
@@ -127,7 +132,7 @@ pi
 **扩展默认配置**。都是"只补缺"：你已经设过的键、你调过的扩展配置，一律不动。
 
 ```bash
-pi install git:github.com/kurumi1ksllq/pi-workflow@v1.11.0   # 1. 换版本
+pi install git:github.com/kurumi1ksllq/pi-workflow@v1.12.0   # 1. 换版本
 pi                                                           # 2. 启动：提示补了什么
 pi                                                           # 3. 再启动一次：新清单里的包装上
 ```
@@ -138,7 +143,7 @@ pi                                                           # 3. 再启动一�
 
 ```bash
 pi remove npm:pi-rtk-optimizer          # 1. 清掉旧版清单遗留的那个扩展（如果它在你设置里）
-pi install git:github.com/kurumi1ksllq/pi-workflow@v1.11.0   # 2. 换版本
+pi install git:github.com/kurumi1ksllq/pi-workflow@v1.12.0   # 2. 换版本
 pi                                       # 3. 启动：扩展补 rtk + 重写清单
 pi                                       # 4. 再启动一次：清单里的包才装上
 ```
@@ -155,7 +160,7 @@ pi                                       # 4. 再启动一次：清单里的包�
 团队清单里的包都钉了版本，正常情况下这个提示不该出现。出现了说明你手上那份清单是旧的：
 
 ```bash
-pi install git:github.com/kurumi1ksllq/pi-workflow@v1.11.0   # 1. 换到钉版本的清单
+pi install git:github.com/kurumi1ksllq/pi-workflow@v1.12.0   # 1. 换到钉版本的清单
 pi                                                           # 2. 启动：扩展把不带版本的旧条目换成钉版本
 pi                                                           # 3. 再启动一次：按钉的版本装齐
 ```
@@ -179,7 +184,7 @@ pi                                                           # 3. 再启动一�
 
 | 情况 | 怎么办 |
 | --- | --- |
-| 你的版本太老（早于 v1.9.0，包里还没有自动更新逻辑） | 手动跑一次：`pi install git:github.com/kurumi1ksllq/pi-workflow@v1.11.0` 之后就不用管了 |
+| 你的版本太老（早于 v1.9.0，包里还没有自动更新逻辑） | 手动跑一次：`pi install git:github.com/kurumi1ksllq/pi-workflow@v1.12.0` 之后就不用管了 |
 | 提示「包目录里有未提交的改动 —— 没敢动」 | 你改过包目录里的文件；`git -C ~/.pi/agent/git/github.com/kurumi1ksllq/pi-workflow status` 看一眼，不需要就 `git checkout -- .` 还原，下次启动会自动跟上 |
 | 网络长期连不上 GitHub | 连上后重启 pi 即可；也可以手动 `pi install ...@<版本>` |
 | 你不想自动跟 | 设环境变量 `PI_BASELINE_SELF_UPDATE=off` |

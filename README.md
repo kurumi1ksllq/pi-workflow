@@ -9,7 +9,7 @@
 2. 全局装基线：
 
    ```bash
-   pi install git:github.com/kurumi1ksllq/pi-workflow@v1.11.0
+   pi install git:github.com/kurumi1ksllq/pi-workflow@v1.12.0
    ```
 
    **注意没有 `-l`** —— 这是全局安装，落到 `~/.pi/agent/settings.json`，
@@ -27,7 +27,7 @@
 **推荐写法，`git:` 前缀不能省：**
 
 ```
-git:github.com/<org>/pi-workflow@v1.11.0
+git:github.com/<org>/pi-workflow@v1.12.0
 ```
 
 省掉前缀 pi 会当本地目录，报 `Path does not exist: ...\github.com\org\pi-workflow` ——
@@ -159,7 +159,7 @@ bash scripts/simulate-member.sh v1.11.0
 
 ```bash
 SB='C:\Users\<你>\pi-check-agent'   # 隔离的 agent 目录，Windows 路径写法
-PI_CODING_AGENT_DIR="$SB" pi install git:github.com/kurumi1ksllq/pi-workflow@v1.11.0
+PI_CODING_AGENT_DIR="$SB" pi install git:github.com/kurumi1ksllq/pi-workflow@v1.12.0
 # 隔离目录不带凭据，启动前把 auth.json 拷进去（models.json 别拷：那正是要验的同步目标）
 PI_CODING_AGENT_DIR="$SB" pi -p ok    # 第一次：扩展写清单 + 补 rtk + 补共享设置 + 补模型配置
 PI_CODING_AGENT_DIR="$SB" pi list     # 应看到清单里的包都带路径

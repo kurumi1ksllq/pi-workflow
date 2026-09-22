@@ -214,6 +214,17 @@ function healthCheck(): string[] {
 			if (!parsed?.providers || Object.keys(parsed.providers).length === 0) {
 				problems.push("team/models.template.json 没有 providers -> 模型配置同步是空转");
 			}
+			// 列表首位的档位会变成「defaultModel 解析不到时」的静默回退目标。
+			// 免费档放首位 = 全员默认跑在每账户每天 100 次请求的池子上（2026-09-23 实况）。
+			for (const [pid, provider] of Object.entries(parsed?.providers ?? {}) as [string, any][]) {
+				const first = Array.isArray(provider?.models) ? provider.models[0] : undefined;
+				const firstId = typeof first?.id === "string" ? first.id : "";
+				if (firstId && /free/i.test(firstId)) {
+					problems.push(
+						`team/models.template.json 的 ${pid}.models 首位是免费档 ${firstId} —— 解析不到 defaultModel 时会静默回退到它，把这档挪到列表末尾`,
+					);
+				}
+			}
 		} catch {
 			problems.push("team/models.template.json 不是合法 JSON -> 模型配置同步被跳过");
 		}
@@ -377,6 +388,31 @@ const STALE_MODEL_MAP: Record<string, string> = {
 	"inclusionai/ling-3.0-flash-sante:free": "tier-free",
 };
 
+/**
+ * 一次性修掉写错形式的 `defaultModel`。
+ *
+ * pi 的 `defaultModel` 只认**裸模型 id**（配 `defaultProvider` 消歧）。写成 `<provider>/<id>`
+ * 时 pi 解析不到，**不报错**，直接静默回退到模型列表的第一个 —— 2026-09-23 实况：本机写成
+ * `newapi/tier-std`，于是所有默认会话都跑在列表首位的免费档（每账户每天 100 次请求）上，
+ * 一天烧满 2 个账户。这种错误不会有人发现，只能机械改回来。
+ *
+ * 判据收得很紧：**仅当前缀正好等于 `defaultProvider` 时才剥掉前缀**。成员若把 defaultModel
+ * 填成别的 provider 前缀（或 id 本身带斜杠的真实模型名），一律不动 —— 那种情况我们判断不了
+ * 他想要什么。`defaultProvider` 缺失时也不动（无法确认前缀是 provider 还是模型名的一部分）。
+ */
+function migrateBrokenDefaultModel(settings: any): boolean {
+	const provider = settings?.defaultProvider;
+	const model = settings?.defaultModel;
+	if (typeof provider !== "string" || !provider) return false;
+	if (typeof model !== "string" || !model) return false;
+	const prefix = `${provider}/`;
+	if (!model.startsWith(prefix)) return false;
+	const bare = model.slice(prefix.length);
+	if (!bare) return false;
+	settings.defaultModel = bare;
+	return true;
+}
+
 /** 走一遍 settings.subagents.agentOverrides，把撞上旧名的 model 换成档位别名。 */
 function migrateStaleModels(settings: any): boolean {
 	const overrides = settings?.subagents?.agentOverrides;
@@ -448,9 +484,11 @@ function syncAgentSettings(): SettingsSync {
 		}
 	}
 	const filled = mergeMissing(settings, patch);
-	// 顺序有意：先补缺（新缺的键写进去的就是档位别名），再迁移成员本地残留的旧真实模型名。
+	// 顺序有意：先补缺（新缺的键写进去的就是档位别名），再迁移成员本地残留的旧真实模型名，
+	// 最后修写错形式的 defaultModel（会静默落到列表首位，见该函数注释）。
 	const migrated = migrateStaleModels(settings);
-	if (!filled && !migrated) return "none";
+	const fixedDefault = migrateBrokenDefaultModel(settings);
+	if (!filled && !migrated && !fixedDefault) return "none";
 	try {
 		fs.mkdirSync(path.dirname(file), { recursive: true });
 		fs.writeFileSync(file, JSON.stringify(settings, null, 2) + "\n", "utf-8");

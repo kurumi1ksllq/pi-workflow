@@ -262,6 +262,74 @@ fs.writeFileSync(modelsFile, "{ this is not json", "utf-8");
 await load();
 check(fs.readFileSync(modelsFile, "utf-8") === "{ this is not json", "models.json 坏了却动了它（场景 10）");
 
+// —— 场景 11：写错形式的 defaultModel 要被剥掉 provider 前缀 ——
+// 背景：`defaultModel` 只认裸 id。写成 `newapi/tier-std` 时 pi 不报错，直接静默回退到
+// 模型列表的第一个 —— 曾因此让默认档落到每账户每天 100 次请求的免费档上，一天烧满 2 个账户。
+fs.rmSync(AGENT, { recursive: true, force: true });
+fs.mkdirSync(AGENT, { recursive: true });
+fs.writeFileSync(
+	settingsFile,
+	JSON.stringify(
+		{
+			defaultProvider: "newapi",
+			defaultModel: "newapi/tier-std", // 写错的形式，要被修成 tier-std
+			theme: "dark",
+		},
+		null,
+		2,
+	),
+	"utf-8",
+);
+await load();
+const dm = readSettings();
+check(dm.defaultModel === "tier-std", `写错形式的 defaultModel 没被修正：${dm.defaultModel}（场景 11）`);
+check(dm.defaultProvider === "newapi", "动了 defaultProvider（场景 11）");
+check(dm.theme === "dark", "动了无关设置项（场景 11）");
+
+// 幂等 + 不越界：成员填别的 provider 前缀、或 provider 缺失时，一律不许动
+const dmBefore = fs.readFileSync(settingsFile, "utf-8");
+await load();
+check(fs.readFileSync(settingsFile, "utf-8") === dmBefore, "defaultModel 迁移不幂等（场景 11）");
+
+fs.writeFileSync(
+	settingsFile,
+	JSON.stringify({ defaultProvider: "newapi", defaultModel: "my-own/reviewer-model" }, null, 2),
+	"utf-8",
+);
+await load();
+check(
+	readSettings().defaultModel === "my-own/reviewer-model",
+	`剥掉了不属于 defaultProvider 的前缀：${readSettings().defaultModel}（场景 11：判据要收紧）`,
+);
+
+fs.writeFileSync(
+	settingsFile,
+	JSON.stringify({ defaultProvider: "my-own-provider", defaultModel: "newapi/tier-std" }, null, 2),
+	"utf-8",
+);
+await load();
+check(
+	readSettings().defaultModel === "newapi/tier-std",
+	`剥掉了不属于成员 defaultProvider 的前缀：${readSettings().defaultModel}（场景 11：判据要收紧）`,
+);
+check(
+	readSettings().defaultProvider === "my-own-provider",
+	"覆盖了成员自己设的 defaultProvider（场景 11：只补缺）",
+);
+
+// 模板卫生：列表首位不许是免费档（会变成静默回退目标）；defaultModel 必须是裸 id
+const tplRaw = fs.readFileSync(path.join(repoRoot, "team", "models.template.json"), "utf-8");
+const tplFirstId = JSON.parse(tplRaw).providers.newapi.models[0]?.id;
+check(
+	!/free/i.test(tplFirstId ?? ""),
+	`team/models.template.json 首位是免费档 ${tplFirstId} —— defaultModel 解析不到时会静默回退到它（场景 11）`,
+);
+const sharedDm = sharedSettings.defaultModel;
+check(
+	typeof sharedDm !== "string" || !sharedDm.includes("/"),
+	`team/agent-settings.json 的 defaultModel 写了 provider/id 形式：${sharedDm}（场景 11：只认裸 id）`,
+);
+
 console.log("设置里的 packages：", JSON.stringify(after.packages));
 console.log("注入段版本行：", injected4.systemPrompt.split("\n").find((l) => l.includes("pi-workflow")));
 console.log("共享设置补缺后：", JSON.stringify({ compaction: mine.compaction, subagents: mine.subagents }));

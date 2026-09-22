@@ -1,5 +1,25 @@
 # 变更记录
 
+## v1.12.0
+- **修一个会静默烧光免费档的默认值坑（`defaultModel` 写成了 `provider/id` 形式）**。
+  现象：全团队默认会话实际跑在 `tier-free` 上，一天把 2 个账户的免费额度（每账户每天 **100 次请求**）打满，
+  上游报 `You've used all 100 free Ling 3.0 Flash Sante requests for today`。
+  根因：pi 的 `defaultModel` **只认裸模型 id**（配 `defaultProvider` 消歧）。写成 `newapi/tier-std` 时
+  解析不到、**不报错**，直接静默回退到 `models.json` 里**列表的第一个**档位 —— 而模板把
+  `tier-free` 放在了首位。这个错误不会自己暴露，只会表现为「额度莫名其妙没了」。
+- **`team/models.template.json` 的档位顺序反了回来：`tier-std` 打头、`tier-free` 挪到末尾**。
+  顺序本身就是语义（见上一条），文件里的 `_档位顺序（别改）` 说明键写清了原因。
+- **新增一次性迁移 `migrateBrokenDefaultModel()`**：把本机 `<defaultProvider>/<id>` 形式的前缀剥掉。
+  判据收得很紧 —— **只有前缀正好等于该成员的 `defaultProvider` 时才改**；`defaultProvider` 缺失、
+  或填的是别的 provider 前缀时一律不动（那两种情况判断不了他想要什么）。复用「重启 pi 生效」提示。
+- **`team/agent-settings.json` 新增 `defaultProvider` / `defaultModel` 两个键**（裸 id）：
+  新成员直接拿到正确的默认档；已有成员**只在缺这两个键时**被补上，自己设过的一律不动。
+- **`healthCheck()` 多一条机械闸**：模板里任一 provider 的 `models` **首位是免费档**（id 含 `free`）
+  就在启动时报警 —— 凭据红线那套「不靠记性」的同一思路。
+- 测试：`scripts/test-extension.mjs` 加场景 11（前缀被剥掉 + 无关键不被碰 + 幂等 + 不属于 defaultProvider
+  的前缀不许剥 + 成员自设 defaultProvider 不被覆盖 + 模板首位不是免费档 + 模板 defaultModel 是裸 id），11 个场景全绿。
+- 实测（pi 0.87.0）：改前同一命令跑 `tier-free`，改后跑 `tier-std`；上游 429 复现与消失都已确认。
+
 ## v1.11.0
 - **团队模型配置纳入同步（新数据源 `team/models.template.json` → 成员的 `~/.pi/agent/models.json`）**。
   为什么需要：`team/agent-settings.json` 里的 subagents 路由用的是**档位别名**（`tier-power` / `tier-max`），
