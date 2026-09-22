@@ -1,7 +1,8 @@
 node_modules/
 __pycache__/
 
-# 给 pi 的本地需求书，不进公开仓库
+# 给 pi 的本地需求书与进度文档，不进公开仓库
 docs/audit-log-spec.md
 docs/audit-report-spec.md
 docs/audit-optimize-spec.md
+docs/audit-progress.md
