@@ -673,6 +673,120 @@ def build_subagents(audit_sessions, runs, enabled, sessions_dir):
     }, type_by_sid
 
 
+def build_context_composition(events, max_sessions=10):
+    """上下文构成段数据（docs/audit-report.md §9）。
+
+    数据源只有阶段 3 新增的 `context_sample` 事件（每轮一条，挂在 `turn_end`）。
+    老日志里没这个事件 → 本段为空，报表侧写「本段需要 context_sample 事件」，不 traceback。
+
+    口径（spec §3.3，别自己发明）：
+    - **固定税** = `sections` 合计 + `toolDefs.chars`（每轮完全不变的那部分）
+    - **增长** = `messages.charsByRole` 合计 − 该轮 `system` 部分（system 里已含 sections）
+    - **字符 → token 比例** = `contextTokens` ÷ 该轮总字符（总字符 = messages 合计 + toolDefs.chars）
+    - **对账** = |`contextTokens` − (`input` + `cacheRead`)| ÷ (`input` + `cacheRead`) ≤ 2%
+
+    `assistant_usage` 不带 `turnIndex`，只能按会话内 `(ts, seq)` 顺序与 `context_sample` 逐轮配对；
+    同轮里 `assistant_usage`（message_end）永远早于 `context_sample`（turn_end），所以顺序配对成立。
+    """
+    by_sid = defaultdict(lambda: {"samples": [], "usages": []})
+    for ev in events:
+        sid = _sid(ev.get("sessionId"))
+        if not sid:
+            continue
+        kind = ev.get("event")
+        if kind == "context_sample":
+            by_sid[sid]["samples"].append(ev)
+        elif kind == "assistant_usage":
+            by_sid[sid]["usages"].append(ev)
+
+    rows = []
+    # 全局字符→token 比例：收齐**所有会话、所有轮次**的逐轮比例，最后取**一次**中位。
+    # 不能“每会话先取中位、再对这些中位取中位”：会话轮数不等时会失真
+    # （100 轮 0.25 + 1 轮 1.0 → 正确 0.25，中位的中位却是 0.625），
+    # 而这个比例会拿去换算每一行的固定税，错一处就全错。
+    all_turn_ratios = []
+    for sid, d in by_sid.items():
+        if not d["samples"]:
+            continue
+        order = _sort_key
+        samples = sorted(d["samples"], key=order)
+        usages = sorted(d["usages"], key=order)
+
+        def chars_of(s):
+            msgs = s.get("messages")
+            byrole_raw = _dict(msgs.get("charsByRole")) if isinstance(msgs, dict) else {}
+            byrole = {k: _num(v) for k, v in byrole_raw.items()} if isinstance(byrole_raw, dict) else {}
+            tool_defs = s.get("toolDefs")
+            tool = _num(tool_defs.get("chars") if isinstance(tool_defs, dict) else 0)
+            return {
+                "total": sum(byrole.values()) + tool,
+                "tool": tool,
+                "fixed": _num(s.get("sectionsTotalChars")) + tool,
+                # 增长 = 全部消息 − system 部分（system 里已含 sections）
+                "growth": sum(byrole.values()) - byrole.get("system", 0),
+            }
+
+        per_turn = [chars_of(s) for s in samples]
+        for s, c in zip(samples, per_turn):
+            tk = s.get("contextTokens")
+            if isinstance(tk, (int, float)) and not isinstance(tk, bool) and c["total"] > 0:
+                all_turn_ratios.append(tk / c["total"])
+
+        # 对账：两列表都按 (ts, seq) 排好了，同轮里 `assistant_usage` 先写、`context_sample` 后写，
+        # 所以双指针就近配对即可。不能用 zip：升级当天部分轮次没 sample，zip 会从头部错位。
+        # 比较必须用完整 (ts, seq)：同毫秒时间戳时只比 ts 会把 seq 在 sample 之后的 usage 错配进来。
+        reconcile = None
+        j = 0
+        for s in samples:
+            sk = order(s)
+            while j + 1 < len(usages) and order(usages[j + 1]) <= sk:
+                j += 1
+            if j >= len(usages) or order(usages[j]) > sk:
+                continue
+            us = usages[j].get("usage") if isinstance(usages[j].get("usage"), dict) else {}
+            j += 1  # 消费掉，不重复配
+            billed = _num(us.get("input")) + _num(us.get("cacheRead"))
+            tk = s.get("contextTokens")
+            if billed > 0 and isinstance(tk, (int, float)) and not isinstance(tk, bool):
+                dev = abs(tk - billed) / billed * 100
+                if reconcile is None or dev > reconcile:
+                    reconcile = dev
+
+        # 「每轮平均 input+缓存读」按该会话**全部** assistant_usage 算（这就是「每轮」的含义）
+        billed_all = [_num(_dict(u.get("usage")).get("input")) + _num(_dict(u.get("usage")).get("cacheRead"))
+                      for u in usages if isinstance(u.get("usage"), dict)]
+        billed_all = [b for b in billed_all if b > 0]
+        avg_billed = statistics.mean(billed_all) if billed_all else None
+
+        rows.append({
+            "sessionId": sid,
+            "turns": len(samples),
+            "fixedTaxChars": per_turn[0]["fixed"],
+            "toolChars": per_turn[0]["tool"],
+            "firstGrowth": per_turn[0]["growth"],
+            "lastGrowth": per_turn[-1]["growth"],
+            "avgInputCache": avg_billed,
+            "reconcilePct": reconcile,
+        })
+
+    # 两阶段：先求全局中位比例（逐轮汇总，不是中位的中位），再回填每行。
+    # 若各行用自己的会话内比例，与表下公布的换算比例就不是同一个数，表中「估算」列会与说明不符。
+    ratio = statistics.median(all_turn_ratios) if all_turn_ratios else None
+    for r in rows:
+        fixed_tokens = r["fixedTaxChars"] * ratio if ratio else None
+        r["fixedTaxTokens"] = fixed_tokens
+        # 存裸百分比数值（与 reconcilePct 同构），Markdown 侧再转 "83.8%"。
+        # 若存 _pct() 的字符串，--json 下游拿到的是 "83.8%" 而非数字，没法直接算。
+        r["fixedTaxSharePct"] = (100.0 * fixed_tokens / r["avgInputCache"]
+                                 if (fixed_tokens is not None and r["avgInputCache"]) else None)
+        r["ratio"] = ratio
+
+    rows.sort(key=lambda r: (-r["turns"], r["sessionId"]))
+    return {"rows": rows[:max_sessions], "totalRows": len(rows),
+            "ratio": ratio,
+            "maxReconcilePct": max([r["reconcilePct"] for r in rows if r["reconcilePct"] is not None], default=None)}
+
+
 # --------------------------------------------------------------------------- #
 # 报表数据
 # --------------------------------------------------------------------------- #
@@ -680,7 +794,7 @@ def build_data(args, entries, sessions, daily, bymodel, stats, events, subagents
     R = {"generatedAt": datetime.now().astimezone().isoformat(timespec="seconds"),
          "sources": [], "overview": {}, "tokensByDay": [], "tokensByModel": [],
          "topSessions": [], "byPerson": None, "tools": [], "skills": [],
-         "completion": {}, "contextPressure": {},
+         "completion": {}, "contextPressure": {}, "contextComposition": {},
          "cost": None, "observations": []}
 
     for path, label in entries:
@@ -828,6 +942,7 @@ def build_data(args, entries, sessions, daily, bymodel, stats, events, subagents
         R["cost"] = build_cost(args.prices, bymodel)
 
     R["subagents"] = subagents
+    R["contextComposition"] = build_context_composition(events)
     R["observations"] = build_observations(R, grand)
     return R
 
@@ -1071,6 +1186,55 @@ def render_subagents(sub) -> list:
     return L
 
 
+def render_context_composition(cc) -> list:
+    """「上下文构成」段（docs/audit-report.md §9）。缺数据只写一行提示，不算错。"""
+    L = ["## 6. 上下文构成", ""]
+    rows = _list(cc.get("rows"))
+    if not rows:
+        L.append("暂无可用的 `context_sample` 事件（该事件自阶段 3 起才写入，老日志没有）。")
+        L.append("")
+        return L
+
+    ratio = cc.get("ratio")
+    ratio_txt = "-" if not ratio else f"{ratio:.4f}"
+    table = []
+    for r in rows:
+        table.append([
+            _short_id(r["sessionId"]),
+            _fmt(r["turns"]),
+            _fmt(r["fixedTaxChars"]),
+            _fmt(r["toolChars"]),
+            _fmt(r["firstGrowth"]),
+            _fmt(r["lastGrowth"]),
+            "-" if r["avgInputCache"] is None else _fmt(round(r["avgInputCache"])),
+            "-" if r["fixedTaxSharePct"] is None else f"{r['fixedTaxSharePct']:.1f}%",
+        ])
+    L.append(md_table(["会话", "轮数", "固定税(字符)", "工具定义(字符)", "首轮增长(字符)",
+                       "末轮增长(字符)", "每轮平均 input+缓存读", "固定税估算占比"], table))
+    L.append("")
+    if cc.get("totalRows", 0) > len(rows):
+        L.append(f"（共 {cc['totalRows']} 个会话有 `context_sample`，本表只列前 {len(rows)} 个）")
+        L.append("")
+
+    L.append("口径：")
+    L.append("")
+    L.append("- **固定税** = `sections` 合计 + `toolDefs.chars`（每轮完全相同的部分）")
+    L.append("- **增长** = `messages.charsByRole` 合计 − 该轮 `system` 部分（system 里已含 `sections`；"
+             "首轮末尾 = 用户输入，末轮末尾 = 用户输入 + 历史 + 工具回灌）")
+    L.append(f"- **字符 → token 换算**：本表用同一批日志算出的比例 **{ratio_txt}** "
+             "（=`contextTokens` ÷ 该轮总字符，取中位）。**表里带「估算」的列都是这个比例换算来的，不是 token 实测值。**")
+    L.append("- **对账**：`contextTokens` 应 ≈ 该轮 `assistant_usage.usage.input + cacheRead`（同一次请求的两种口径）。")
+    mr = cc.get("maxReconcilePct")
+    if mr is None:
+        L.append("  本批日志里可对账的轮次为 0，无法给出偏差。")
+    elif mr > 2:
+        L.append(f"  ⚠ 对账偏差 {mr:.2f}%（超过 2%）—— 说明 `contextTokens` 与计费口径不是同一件事，别互相换算。")
+    else:
+        L.append(f"  本批日志最大偏差 {mr:.2f}%，在 2% 以内。")
+    L.append("")
+    return L
+
+
 def render_markdown(R, args) -> str:
     ov = R["overview"]
     L = []
@@ -1166,9 +1330,10 @@ def render_markdown(R, args) -> str:
         L.append("")
 
     # 6 上下文构成（阶段 3）
+    L.extend(render_context_composition(R["contextComposition"]))
 
     # 7 skill 命中
-    L.append("## 6. skill 命中")
+    L.append("## 7. skill 命中")
     L.append("")
     rows = []
     for sk in R["skills"]:
@@ -1190,7 +1355,7 @@ def render_markdown(R, args) -> str:
     L.append("")
 
     # 8 完成度
-    L.append("## 7. 完成度")
+    L.append("## 8. 完成度")
     L.append("")
     c = R["completion"]
     L.append(md_table(["项", "值"], [
@@ -1210,7 +1375,7 @@ def render_markdown(R, args) -> str:
         L.append("")
 
     # 9 上下文压力
-    L.append("## 8. 上下文压力")
+    L.append("## 9. 上下文压力")
     L.append("")
     cp = R["contextPressure"]
     L.append(md_table(["项", "值"], [
@@ -1236,7 +1401,7 @@ def render_markdown(R, args) -> str:
 
     # 10 成本
     if R["cost"] is not None:
-        L.append("## 9. 成本（折算）")
+        L.append("## 10. 成本（折算）")
         L.append("")
         cost = R["cost"]
         if cost.get("error"):
@@ -1266,7 +1431,7 @@ def render_markdown(R, args) -> str:
             L.append("")
 
     # 11 观察
-    L.append("## 10. 观察")
+    L.append("## 11. 观察")
     L.append("")
     for i, o in enumerate(R["observations"], 1):
         L.append(f"{i}. {o}")
