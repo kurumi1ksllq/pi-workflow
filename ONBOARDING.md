@@ -94,6 +94,7 @@ pi
 | `/review` | 敲它审查当前 diff |
 | 团队统一装的扩展 | 启动时自动补进你的全局设置，重启后生效 |
 | 共享的扩展设置 | `subagents` 模型路由、`compaction` 这些团队一致的设置，扩展**只补缺**地并进你的全局设置 —— 你设过的键不会被覆盖 |
+| 模型配置（网关 + 档位） | 网关地址和四个档位别名（`tier-free` / `tier-std` / `tier-power` / `tier-max`）自动补进你的 `~/.pi/agent/models.json`。**key 不在里面**（`apiKey` 写的是 `$NEWAPI_API_KEY` 引用）—— 你自己导出这个环境变量，或者用 pi 的 `/login` 给 `newapi` 存一份 key。已经有同名 provider 或同名档位就不动你的 |
 | 扩展默认配置 | 像 `pi-rtk-optimizer` 这种把配置放自己目录的扩展，首次启动时从包里补一份默认配置；你调过之后就不动 |
 | rtk 命令压缩 | 同上，扩展顺手把缺的 `rtk` 二进制补到 PATH 里的目录 |
 | MCP 基线 | 在已接入基线的项目里自动补 `.mcp.json` |
@@ -102,9 +103,23 @@ pi
 
 > ⚠️ **前提**：上面「共享的扩展设置」里的 `subagents` 模型路由用的是**团队网关的档位别名**
 > （`tier-power`、`tier-max`，不是真实模型名 —— 网关换后端模型时这边不用动）。
+> 走团队网关的话这些档位名能直接解析（网关地址与档位定义自动补进 `models.json`，见上一行）。
 > 你要是不走团队网关（比如用自己买的 API），那几个档位名对你无效 ——
 > 把这几项从自己的 `~/.pi/agent/settings.json` 里删掉，或换成你自己的模型。
 > 扩展不会把它们补回来：共享设置是**只补缺**，你设过的（甚至故意留空的处理方式）它都不动。
+>
+> 走团队网关的话，网关地址和档位定义（`models.json` 里那段 `newapi`）**是自动补的**，你只需要把
+> key 给它：二选一 ——
+>
+> ```bash
+> export NEWAPI_API_KEY=sk-...          # ① 环境变量（模板里 apiKey 就写的这个引用）
+> # ② 或者在 pi 里敲 /login，给 newapi 这个 provider 存一份 key（落在 auth.json，优先级更高）
+> ```
+>
+> 配完敲 `pi --list-models`，应能看到 `newapi` 下的四个 `tier-*`。想默认用某个档位，
+> `~/.pi/agent/settings.json` 里写 `"defaultModel": "tier-std"`（**裸模型 id**，
+> 配合 `"defaultProvider": "newapi"` 消歧）—— 实测写成 `newapi/tier-std` 反而解析不到，
+> 会静默回退到列表里的第一个模型。扩展不碰这两个键，是你自己的选择。
 
 ## 从 v1.6.x 升到 v1.7.x
 

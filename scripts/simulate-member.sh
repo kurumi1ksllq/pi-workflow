@@ -33,12 +33,41 @@ SB="${PI_SIM_DIR:-$BASE/pi-member-sim}"
 rm -rf "$SB"
 mkdir -p "$SB/agent" "$SB/proj"
 
-# 隔离目录没有凭据，pi 启动会直接退出 —— 只拷凭据文件，不拷已装的包
-for f in auth.json models.json; do
-  [ -f "$HOME/.pi/agent/$f" ] && cp "$HOME/.pi/agent/$f" "$SB/agent/" 2>/dev/null
-done
+# 隔离目录没有凭据，pi 启动会直接退出 —— 只拷凭据文件，不拷已装的包。
+# ⚠️ models.json **不拷**：它是团队要同步的目标之一，拷进去就等于把现场做好，
+#    验不出「模型配置同步」这条链路（真成员机器上那文件要么不存在、要么是他自己那份）。
+[ -f "$HOME/.pi/agent/auth.json" ] && cp "$HOME/.pi/agent/auth.json" "$SB/agent/" 2>/dev/null
+# 真成员手上可能已经有自己那份 models.json（比如自己写过别的 provider）—— 放一份进去当干扰项，
+# 顺便验「只补缺、不动他已有的东西」。
+cat > "$SB/agent/models.json" <<'EOF'
+{
+  "providers": {
+    "mine": {
+      "baseUrl": "http://localhost:11434/v1",
+      "api": "openai-completions",
+      "models": [{ "id": "local-llama" }]
+    }
+  }
+}
+EOF
 
 export PI_CODING_AGENT_DIR="$SB/agent"
+# 成员的网关 key：团队模板里写的是 $NEWAPI_API_KEY 引用，所以真机上得有人导出这个变量
+# （或走 /login 存进 auth.json）。模拟脚本从本机现有配置里取一份，好让两次启动真能跑起来。
+NEWAPI_KEY="$(node -e '
+const fs = require("fs");
+try {
+  const p = JSON.parse(fs.readFileSync(process.argv[1], "utf-8")).providers?.newapi;
+  const k = p?.apiKey ?? "";
+  process.stdout.write(k.startsWith("$") || k.includes("...") ? "" : k);
+} catch {}
+' "$HOME/.pi/agent/models.json" 2>/dev/null)"
+if [ -n "$NEWAPI_KEY" ]; then
+  export NEWAPI_API_KEY="$NEWAPI_KEY"
+  echo "已导出 NEWAPI_API_KEY（从本机 models.json 取，仅供模拟启动用）"
+else
+  echo "⚠ 本机 models.json 里取不到明文 newapi key —— 两次启动可能因缺 key 直接退出，结果不可信"
+fi
 # 摘掉含 rtk 的目录（本机 rtk 一般在 ~/.local/bin），制造"没装过 rtk"的初始条件
 export PATH=$(echo "$PATH" | tr ':' '\n' | grep -v '\.local/bin' | paste -sd:)
 
@@ -94,6 +123,25 @@ for name in pi-rtk-optimizer audit-log; do
 		echo "  （$name 没补上 —— 扩展配置同步这一步失败了）"
 	fi
 done
+echo "--- models.json（团队模型配置同步）---"
+node -e '
+const fs = require("fs");
+const f = process.argv[1];
+try {
+  const m = JSON.parse(fs.readFileSync(f, "utf-8"));
+  const p = m.providers && m.providers.newapi;
+  if (!p) { console.log("  （缺 newapi —— 模型配置同步没生效）"); process.exit(0); }
+  console.log("  baseUrl:", p.baseUrl);
+  console.log("  apiKey :", p.apiKey, "（必须是 $ 环境变量引用，不能是明文 key）");
+  console.log("  档位   :", (p.models || []).map((x) => x.id).join(", ") || "（无）");
+  const mine = m.providers && m.providers.mine;
+  console.log("  成员自建 provider 保留:", mine ? "✓ mine/local-llama" : "✗ 被动了（不该）");
+  const bad = Object.keys(m.providers).filter((k) => /^_/.test(k));
+  console.log("  说明键泄漏:", bad.length ? bad.join(",") + "（不该出现）" : "无 ✓");
+} catch (e) {
+  console.log("  读不到或不是合法 JSON:", e.message);
+}
+' "$SB/agent/models.json"
 echo "--- 审计扩展是否真的在跑（真机证据，不是配置存在就算）---"
 audit_log="$SB/agent/audit/logs/$(date +%F).jsonl"
 if [ -f "$audit_log" ] && grep -q '"event":"session"' "$audit_log"; then
@@ -168,4 +216,5 @@ echo
 echo "判据：① pi list 每项都带安装路径 ② node_modules 里有清单里的包 ③ rtk 能被找到"
 echo "      ④ settings.json 里有 subagents 和 compaction ⑤ 扩展配置已补（rtk + 审计）"
 echo "      ⑥ 模板说明键没泄漏 ⑦ 审计日志真写出来了且没有重复加载 ⑧ 自动更新跟上了新 tag（用本地假远端验）"
+echo "      ⑨ models.json 里有 newapi + 四个档位，且 apiKey 是 \$ 环境变量引用（不是明文 key）"
 echo "清理：rm -rf \"$SB\""

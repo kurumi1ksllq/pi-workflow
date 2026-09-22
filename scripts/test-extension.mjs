@@ -208,6 +208,60 @@ const beforeSecond = fs.readFileSync(settingsFile, "utf-8");
 await load();
 check(fs.readFileSync(settingsFile, "utf-8") === beforeSecond, "迁移不幂等：第二次启动又改了设置（场景 9）");
 
+// —— 场景 10：团队模型配置（models.json）只补缺地并进全局 ——
+// 成员手里：自己写的 newapi（改了 baseUrl、只有 tier-std）+ 一个自建 provider
+fs.rmSync(AGENT, { recursive: true, force: true });
+fs.mkdirSync(AGENT, { recursive: true });
+const modelsFile = path.join(AGENT, "models.json");
+fs.writeFileSync(
+	modelsFile,
+	JSON.stringify(
+		{
+			providers: {
+				newapi: {
+					baseUrl: "http://my-own-proxy:3000/v1", // 成员自己改过的，不能被模板覆盖
+					api: "openai-completions",
+					models: [{ id: "tier-std", name: "我自己写的标准档" }],
+				},
+				mine: { baseUrl: "http://localhost:11434/v1", api: "openai-completions", models: [{ id: "local" }] },
+			},
+		},
+		null,
+		2,
+	),
+	"utf-8",
+);
+await load();
+const mm = JSON.parse(fs.readFileSync(modelsFile, "utf-8"));
+const tplProviders = JSON.parse(fs.readFileSync(path.join(repoRoot, "team", "models.template.json"), "utf-8")).providers;
+const tplNewapi = tplProviders.newapi;
+check(mm.providers.newapi.baseUrl === "http://my-own-proxy:3000/v1", "覆盖了成员自己改的 baseUrl（场景 10：只补缺）");
+check(
+	mm.providers.newapi.models.find((m) => m.id === "tier-std").name === "我自己写的标准档",
+	"覆盖了成员已有的档位定义（场景 10：已有档位不动）",
+);
+for (const want of tplNewapi.models.map((m) => m.id)) {
+	check(
+		mm.providers.newapi.models.some((m) => m.id === want),
+		`模板里的档位 ${want} 没补进成员配置（场景 10：缺的档位要追加）`,
+	);
+}
+check(mm.providers.mine?.models?.[0]?.id === "local", "动了成员自建的 provider（场景 10）");
+check(!JSON.stringify(mm).includes('"_说明"'), "模板里的 `_` 说明键被写进了 models.json（场景 10）");
+check(!/"apiKey"\s*:\s*"(?!\$|!)/.test(fs.readFileSync(path.join(repoRoot, "team", "models.template.json"), "utf-8")),
+	"team/models.template.json 里出现了明文 apiKey —— 公开仓库不许放 key（场景 10）");
+check(mm.providers.newapi.apiKey === tplNewapi.apiKey, "provider 缺的 apiKey 没补上（场景 10）");
+
+// 幂等：再跑一次不该改文件
+const modelsBefore2 = fs.readFileSync(modelsFile, "utf-8");
+await load();
+check(fs.readFileSync(modelsFile, "utf-8") === modelsBefore2, "模型配置同步不幂等：第二次启动又改了文件（场景 10）");
+
+// 成员的 models.json 坏掉时不许碰（覆盖会把他能修回来的内容抹掉）
+fs.writeFileSync(modelsFile, "{ this is not json", "utf-8");
+await load();
+check(fs.readFileSync(modelsFile, "utf-8") === "{ this is not json", "models.json 坏了却动了它（场景 10）");
+
 console.log("设置里的 packages：", JSON.stringify(after.packages));
 console.log("注入段版本行：", injected4.systemPrompt.split("\n").find((l) => l.includes("pi-workflow")));
 console.log("共享设置补缺后：", JSON.stringify({ compaction: mine.compaction, subagents: mine.subagents }));

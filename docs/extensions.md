@@ -18,6 +18,7 @@
 | MCP 配置 | 没有"从包里读"的入口 | 项目缺 `.mcp.json` 时，从 `team/mcp.template.json` 补一份 |
 | 第三方包清单 | 包里的设置文件不会被读 | 把 `team/packages.json` 里的包补进**全局** `~/.pi/agent/settings.json` |
 | 共享的全局设置 | 同上，包里的设置不会被读 | 把 `team/agent-settings.json` **只补缺**地并进全局设置 |
+| 团队模型配置 | 同上；且 `subagents` 路由写的档位别名要求成员本地有对应 provider + 档位 | 把 `team/models.template.json` 按 provider 并进全局 `models.json`（provider 内按 id 追加，见下节） |
 | 扩展自己的配置 | 各扩展只读自己固定位置的 `config.json` | 把 `team/extensions/<扩展名>.json` 补到那个位置（**存在就不动**） |
 | 包的外部依赖 | `pi install` 只装 npm 包本身，命令行不进 PATH | 缺 `rtk` 时从包内 `tools/` 补到 npm 全局 bin |
 | 团队包自己的更新 | 启动只弹提示、**不自动应用**；钉了 tag 连提示都不弹 | 比对远端最新 `vX.Y.Z` tag，落后就 fetch + reset --hard，并改写 settings 里的 ref |
@@ -133,6 +134,41 @@ git 源同样要钉：是 tag 就写 `@v1.2.3`，只有主干可跟就写完整 
   模板见 `templates/project-settings.json`）
 - ⚠️ **不许放凭据**：模型名可以，key / token / 密码不行（仓库是公开的）
 
+## 团队模型配置：team/models.template.json
+
+`subagents` 的路由用的 `tier-power` / `tier-max` 是**档位别名**，只有在成员的 `models.json` 里
+定义了对应 provider + 档位才解析得出来。所以这段配置也得同步 —— 数据源就是
+`team/models.template.json`，扩展按 provider 并进全局 `~/.pi/agent/models.json`。
+
+**合并规则比 settings 细一层**（这条别改回整体深合并）：
+
+| 情况 | 处理 |
+| --- | --- |
+| provider 在成员那儿不存在 | 整段补 |
+| provider 已存在 | 只补它缺的字段（`baseUrl` / `api` / `apiKey` / `name`），成员设过的不动 |
+| 模板里的档位，成员那儿没有 | 追加进他的 `models` 数组 |
+| 成员已有的同名档位 | **完全不动**（他可能自己调过上下文长度或名字） |
+| 成员自建的 provider / 档位 | 一律不碰 |
+
+为什么不能直接复用 `mergeMissing`：它是对象深合并，**数组在里面是整体当一个值** ——
+于是「provider 已存在」就等于整个 `models` 数组永不更新，团队以后往网关注册新档位时
+成员的配置永远补不上，只能靠人喊。
+
+⚠️ **凭据红线（机械校验）**：这个文件进的是**公开**仓库，`apiKey` 只允许
+环境变量引用（`"$NEWAPI_API_KEY"`）或命令（`"!op read ..."`）。`healthCheck()` 里有一条扫描，
+模板里出现明文 key 会在启动时打进 stderr —— 不靠记性。成员侧自己导出这个变量，
+或用 pi 的 `/login` 给该 provider 存一份 key（`auth.json` 的凭据优先于 `models.json` 里的值，
+所以模板里那条未解析的引用不会挡路，实测过）。
+
+`_` 开头的说明键同样**不写进成员文件**（和 `agent-settings.json` 一条规矩）。
+
+扩展**不碰** `settings.json` 里的 `defaultProvider` / `defaultModel` / `enabledModels`：
+默认用哪个档位是成员自己的选择。⚠️ 实测记录：`defaultModel` 取的是**裸模型 id**
+（`"tier-std"` + `"defaultProvider": "newapi"`）；写成 `"newapi/tier-std"` 解析不到，
+会**静默回退到列表里的第一个模型**（不报错，最容易被误认为配置生效）。
+`enabledModels` 也是裸 id / glob（`["tier-std","tier-max"]`），写成 `provider/id` 会提示
+`No models match pattern`。
+
 ## 扩展自己的配置：team/extensions/
 
 有些扩展的配置不在 `settings.json` 里，而在自己的文件里 —— 比如 `pi-rtk-optimizer` 读的是
@@ -187,7 +223,7 @@ team/extensions/<扩展名>.json   →   <agent dir>/extensions/<扩展名>/conf
 
 | 层 | 覆盖什么 | 机制 |
 | --- | --- | --- |
-| 1. 扩展内自检 | 规范缺失、MCP 模板非法、共享设置模板缺失/非法 | 启动时写 **stderr**（print / json / rpc 都可见），交互模式额外 notify |
+| 1. 扩展内自检 | 规范缺失、MCP 模板非法、共享设置模板缺失/非法、模型配置模板缺失/非法/含明文 key | 启动时写 **stderr**（print / json / rpc 都可见），交互模式额外 notify |
 | 2. 注入段带版本号 | 不知道自己跑的是哪版 | 注入文本里有 `（来源：pi-workflow vX.Y.Z）`，问模型就能问出来 |
 | 3. 项目侧哨兵 | **扩展完全没加载**（项目未信任等） | 各项目仓库根放 `templates/project-AGENTS.md` —— pi 原生加载它，扩展挂了它会提醒模型主动报告 |
 
@@ -248,4 +284,5 @@ team/extensions/<扩展名>.json   →   <agent dir>/extensions/<扩展名>/conf
 | `team/mcp.template.json` | MCP 基线。`mcpServers` 为空时扩展不动作；填了才会往项目里补 |
 | `team/packages.json` | 第三方 pi 包清单，补进全局设置。唯一入口，别在项目里手写包 |
 | `team/agent-settings.json` | 共享的全局设置补丁（`subagents` / `compaction` 等），只补缺地并进全局设置。不许放凭据 |
+| `team/models.template.json` | 团队模型配置（网关地址 + 档位别名），按 provider 并进全局 `models.json`。**`apiKey` 只能写 `$环境变量` 引用** |
 | `team/extensions/<扩展名>.json` | 各扩展自己的默认配置，补到 `<agent dir>/extensions/<扩展名>/config.json`。已存在则不动 |

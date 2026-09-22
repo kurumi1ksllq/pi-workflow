@@ -1,5 +1,33 @@
 # 变更记录
 
+## v1.11.0
+- **团队模型配置纳入同步（新数据源 `team/models.template.json` → 成员的 `~/.pi/agent/models.json`）**。
+  为什么需要：`team/agent-settings.json` 里的 subagents 路由用的是**档位别名**（`tier-power` / `tier-max`），
+  而别名只在成员的 `models.json` 里定义了对应 provider + 档位才解析得出来 —— 团队里只有维护者一个人配过网关，
+  新成员装完基线派出去的 reviewer 会拿到一个解析不了的模型名。以前 `ONBOARDING.md` 只说「不走团队网关就删掉那几项」，
+  走团队网关怎么配 `models.json` 没写，是个空白。
+- **合并规则比 settings 更细：按 provider 合并，provider 内部按 model id 追加**。不能直接复用 `mergeMissing`
+  ——（对象深合并里）数组是整体当一个值，于是「provider 已存在」等于整个 `models` 数组永不更新，
+  团队以后往网关注册新档位，成员的配置永远补不上。现在的语义：provider 缺就整段补；
+  provider 已在则只补它缺的字段（`baseUrl` / `api` / `apiKey`）；已有档位定义一律不动（成员可能自己调过上下文长度）；
+  模板里有、他那儿没有的档位追加；成员自建的 provider / 档位一律不碰。
+- **凭据红线机械化**：模板进的是**公开**仓库，`apiKey` 只允许环境变量引用（`$NEWAPI_API_KEY`）或命令。
+  `healthCheck()` 里加了一条扫描 —— 模板出现明文 `apiKey` 会在启动时报警，不靠记性。
+  成员侧自己导出 `NEWAPI_API_KEY`，或用 pi 的 `/login` 给 `newapi` 这个 provider 存一份 key（两条路实测都通）。
+- **`_` 开头的说明键不进配置文件**：模板自己解释自己，写进成员文件的只有生效的键（和 `agent-settings.json` 同一条规矩）。
+- 实测记录（隔离 `PI_CODING_AGENT_DIR`，pi 0.87.0）：
+  - 扩展在加载时改写的 `models.json` **本次启动即生效**（负例验过：把 baseUrl 改成 `127.0.0.1:1`，
+    同一次启动直接 `Connection error.`）—— 所以这一条不像包清单那样非要启动两次。
+  - 全链路验过：新成员装完基线 → `subagents` 路由里的 `tier-power` 真解析到
+    `newapi/tier-power`（子代理运行的 model 字段与子会话的 `model_change` 都是它），档位别名端到端可用。
+  - **`defaultModel` 取裸模型 id**（`"tier-std"` + `"defaultProvider": "newapi"`）。写成
+    `"newapi/tier-std"` 解析不到、**静默回退到列表里第一个模型**（不报错，最容易误认为生效）；
+    `enabledModels` 同理只认裸 id / glob。扩展不碰这三个键 —— 默认用哪档是成员自己的选择。
+- 测试：`scripts/test-extension.mjs` 加场景 10（10 项断言：只补缺、已有档位不动、追加缺档位、
+  成员自建 provider 保留、说明键不泄漏、模板无明文 key、幂等、成员 models.json 坏掉时不许碰），10 个场景全绿。
+  `scripts/simulate-member.sh` 第 6 步加 models.json 判据，且**不再把本机的 models.json 拷进隔离目录**
+  （拷进去等于把现场做好，验不出这条链路）；改为放一份「成员自建 provider」当干扰项，顺手验只补缺。
+
 ## v1.10.0
 - **subagents 模型路由改用网关档位别名**：`team/agent-settings.json` 里 `reviewer` / `researcher` / `oracle`
   的目标模型从真实模型名（`z-ai/glm-5.3-flash`、`gpt-5.6-sol`）改成档位别名（`tier-power`、`tier-max`）。

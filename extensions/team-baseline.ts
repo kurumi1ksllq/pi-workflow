@@ -35,6 +35,7 @@ const rulesFile = path.join(packageRoot, "team", "RULES.md");
 const mcpTemplateFile = path.join(packageRoot, "team", "mcp.template.json");
 const packagesManifestFile = path.join(packageRoot, "team", "packages.json");
 const agentSettingsFile = path.join(packageRoot, "team", "agent-settings.json");
+const modelsTemplateFile = path.join(packageRoot, "team", "models.template.json");
 const extensionConfigsDir = path.join(packageRoot, "team", "extensions");
 const pkgJsonFile = path.join(packageRoot, "package.json");
 
@@ -195,6 +196,26 @@ function healthCheck(): string[] {
 			JSON.parse(settingsTpl);
 		} catch {
 			problems.push("team/agent-settings.json 不是合法 JSON -> 共享设置同步被跳过");
+		}
+	}
+	const modelsTpl = readIfExists(modelsTemplateFile);
+	if (!modelsTpl) {
+		problems.push("team/models.template.json 不存在 -> 团队模型配置不会同步");
+	} else {
+		try {
+			const parsed = JSON.parse(modelsTpl);
+			// 凭据红线：模板进的是**公开**仓库，apiKey 只允许环境变量引用（$XXX）或命令（!cmd）。
+			// 明文 key 一旦推出去就收不回来了 —— 这里机械挡住，别靠记性。
+			for (const m of modelsTpl.matchAll(/"apiKey"\s*:\s*"([^"]*)"/g)) {
+				const value = m[1];
+				if (value.startsWith("$") || value.startsWith("!")) continue;
+				problems.push("team/models.template.json 里有明文 apiKey —— 公开仓库不能放 key，改成 $环境变量");
+			}
+			if (!parsed?.providers || Object.keys(parsed.providers).length === 0) {
+				problems.push("team/models.template.json 没有 providers -> 模型配置同步是空转");
+			}
+		} catch {
+			problems.push("team/models.template.json 不是合法 JSON -> 模型配置同步被跳过");
 		}
 	}
 	return problems;
@@ -433,6 +454,124 @@ function syncAgentSettings(): SettingsSync {
 	try {
 		fs.mkdirSync(path.dirname(file), { recursive: true });
 		fs.writeFileSync(file, JSON.stringify(settings, null, 2) + "\n", "utf-8");
+		return "merged";
+	} catch {
+		return "error";
+	}
+}
+
+// ─────────────────── 模型配置同步（models.json）───────────────────
+//
+// 为什么需要这一步：`team/agent-settings.json` 里的 subagents 路由用的是**档位别名**
+// （`tier-power` / `tier-max`），而别名只有在成员的 `models.json` 里定义了对应 provider + 模型
+// 才解析得出来。没有这一步，新成员装完基线派出去的 reviewer 会拿到一个解析不了的模型名。
+//
+// 凭据红线：模板进的是**公开**仓库，所以只同步 baseUrl + 模型定义，
+// apiKey 一律写成环境变量引用（`$NEWAPI_API_KEY`），成员自己 export 或走 /login。
+// healthCheck 会机械拦住明文 key。
+
+type ModelsSync = "merged" | "none" | "error";
+
+/** 拿一个模型定义当「已存在」的判断依据：按 id 比对 */
+function modelIdOf(entry: any): string | undefined {
+	const id = entry?.id;
+	return typeof id === "string" && id ? id : undefined;
+}
+
+/**
+ * 模板里的 `_` 开头键是**给人看的说明**，不许写进成员的配置文件
+ * （和 `team/agent-settings.json` 同一条规矩）。
+ */
+function stripDocKeys(value: any): any {
+	if (Array.isArray(value)) return value.map(stripDocKeys);
+	if (!value || typeof value !== "object") return value;
+	const out: any = {};
+	for (const [key, child] of Object.entries(value)) {
+		if (key.startsWith("_")) continue;
+		out[key] = stripDocKeys(child);
+	}
+	return out;
+}
+
+/**
+ * 模型配置的合并规则：**按 provider 合并，provider 内部按 model id 追加**。
+ *
+ * 为什么不直接复用 `mergeMissing`（只补缺的对象深合并）：数组在那里是**整体当一个值**，
+ * 于是「provider 已存在」就等于整个 models 数组不再更新 —— 团队以后往网关注册新档位
+ * （加一个 `tier-x`），成员的 models.json 永远补不上，只能靠人喊。
+ * 这里的语义是「**只追加缺的档位，已有的档位定义一律不动**」：
+ *
+ * - 成员的 `newapi` 里已经有 `tier-std` → 保留他那一份（他可能自己调过上下文长度）
+ * - 模板里有、他那儿没有的 `tier-x` → 追加进去
+ * - 他自建的 provider / 自建档位 → 一律不碰
+ *
+ * 其余 provider 级字段（`baseUrl` / `api` / `apiKey`）走 `mergeMissing`：缺才补，成员设过的不动。
+ */
+function mergeModelsTemplate(models: any, template: any): boolean {
+	let changed = false;
+	for (const [providerId, tplProvider] of Object.entries(template ?? {}) as [string, any][]) {
+		if (!tplProvider || typeof tplProvider !== "object" || Array.isArray(tplProvider)) continue;
+		let target = models[providerId];
+		if (!target || typeof target !== "object" || Array.isArray(target)) {
+			models[providerId] = structuredClone(tplProvider);
+			changed = true;
+			continue;
+		}
+		// provider 已存在：补缺的 provider 级字段（baseUrl / api / apiKey / name…），不动已有的
+		changed = mergeMissing(target, { ...tplProvider, models: undefined }) || changed;
+		const wanted = Array.isArray(tplProvider.models) ? tplProvider.models : [];
+		if (wanted.length === 0) continue;
+		const current = Array.isArray(target.models) ? target.models : [];
+		const heardIds = new Set(current.map(modelIdOf).filter(Boolean));
+		const toAdd = wanted.filter((m: any) => {
+			const id = modelIdOf(m);
+			return id && !heardIds.has(id);
+		});
+		if (toAdd.length === 0) continue;
+		target.models = [...current, ...structuredClone(toAdd)];
+		changed = true;
+	}
+	return changed;
+}
+
+/**
+ * 把**缺的** provider / 模型从模板补进 models.json —— 只补不覆盖、不动别的键。
+ *
+ * 凭据红线再强调一遍：模板在公开仓库里，`apiKey` 只能写环境变量引用或 `!命令`。
+ */
+function syncModelsConfig(): ModelsSync {
+	const tpl = readIfExists(modelsTemplateFile);
+	if (!tpl) return "none";
+	let patch: any;
+	try {
+		patch = JSON.parse(tpl);
+	} catch {
+		return "error";
+	}
+	if (!patch?.providers || typeof patch.providers !== "object") return "none";
+	const template = stripDocKeys(patch.providers) as any;
+
+	const file = path.join(getAgentDir(), "models.json");
+	const raw = readIfExists(file);
+	let models: any = { providers: {} };
+	if (raw?.trim()) {
+		try {
+			models = JSON.parse(raw);
+		} catch {
+			// 成员文件坏了就**不碰** —— 覆盖会把他原本能修回来的内容抹掉
+			return "error";
+		}
+	}
+	if (!models || typeof models !== "object" || Array.isArray(models)) return "error";
+	if (!models.providers || typeof models.providers !== "object" || Array.isArray(models.providers)) {
+		models.providers = {};
+	}
+
+	const changed = mergeModelsTemplate(models.providers, template);
+	if (!changed) return "none";
+	try {
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(file, JSON.stringify(models, null, 2) + "\n", "utf-8");
 		return "merged";
 	} catch {
 		return "error";
@@ -772,6 +911,21 @@ export default function teamBaseline(pi: ExtensionAPI) {
 	} catch {
 		settingsResult = "error";
 	}
+	let modelsResult: ModelsSync = "none";
+	try {
+		modelsResult = syncModelsConfig();
+		if (modelsResult === "merged") {
+			console.error(
+				"[team-baseline] 已把团队模型配置（网关 + 档位别名）补进 ~/.pi/agent/models.json（只补缺的 provider 与档位，你已有的定义没动）—— **重启 pi 生效**",
+			);
+		} else if (modelsResult === "error") {
+			console.error(
+				"[team-baseline] 团队模型配置写入失败（models.json 不是合法 JSON 或没写权限）—— 本次按你原来的配置跑",
+			);
+		}
+	} catch {
+		modelsResult = "error";
+	}
 	let extConfigsWritten: string[] = [];
 	try {
 		const synced = syncExtensionConfigs();
@@ -860,6 +1014,7 @@ ${rules.trim()}
 					`mcpSync=${mcpResult}\n` +
 					`pkgSync=${pkgResult}\n` +
 					`settingsSync=${settingsResult}\n` +
+					`modelsSync=${modelsResult}\n` +
 					`extConfigsSync=${extConfigsWritten.length ? extConfigsWritten.join(",") : "(无)"}\n` +
 					`rtkSync=${rtkResult}\n` +
 					`selfUpdate=${selfUpdateResult.state}${selfUpdateResult.tag ? ` (${selfUpdateResult.tag})` : ""}\n` +
@@ -893,8 +1048,9 @@ ${rules.trim()}
 					`团队规范：${ok(fs.existsSync(rulesFile))}`,
 					`MCP 模板：${ok(fs.existsSync(mcpTemplateFile))}`,
 					`共享设置模板：${ok(fs.existsSync(agentSettingsFile))}`,
+					`模型配置模板：${ok(fs.existsSync(modelsTemplateFile))}`,
 					`扩展配置模板：${ok(fs.existsSync(extensionConfigsDir))}`,
-					`本次启动同步：清单 ${pkgResult} / 共享设置 ${settingsResult} / 扩展配置 ${extConfigsWritten.length ? extConfigsWritten.join("、") : "无"}`,
+					`本次启动同步：清单 ${pkgResult} / 共享设置 ${settingsResult} / 模型配置 ${modelsResult} / 扩展配置 ${extConfigsWritten.length ? extConfigsWritten.join("、") : "无"}`,
 					`自动更新：${selfUpdateLabel(selfUpdateResult)}`,
 					`本项目 .mcp.json：${fs.existsSync(projectMcp) ? "存在" : "不存在"}`,
 					`自检：${problems.length === 0 ? "✓ 全部通过" : "✗ " + problems.join("；")}`,
