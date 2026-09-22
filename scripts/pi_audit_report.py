@@ -61,6 +61,44 @@ def _num(v) -> int:
         return 0
 
 
+def _sid(v):
+    """sessionId 必须是可哈希的字符串。脏值（list/dict/int）→ None，调用方跳过。
+
+    日志是外部追加写的，坏行不应让整份报表挂掉；而且用 list/dict 当字典键会直接 TypeError。
+    """
+    return v if isinstance(v, str) and v else None
+
+
+def _sort_key(ev) -> tuple:
+    """统一的 (ts, seq) 排序 key：ts 规范成 str，seq 规范成 int。
+
+    直接把原始值丢进 tuple 比较，一旦混入 dict/list 就会 TypeError: '<' not supported；
+    把所有排序点收敛到这一个函数，避免每处各修一次。
+    """
+    ts = ev.get("ts")
+    seq = ev.get("seq")
+    return (ts if isinstance(ts, str) else "", seq if isinstance(seq, int) and not isinstance(seq, bool) else 0)
+
+
+def _label(v, fallback: str) -> str:
+    """从日志里取的**当字典键用的标签**（模型名/工具名/路径/角色）必须是 str。
+
+    脏值若为 dict/list，拿去当键会直接 `TypeError: unhashable type`；
+    统一在这里归一，免得每处 `.get()` 各写一遍 isinstance。
+    """
+    return v if isinstance(v, str) and v else fallback
+
+
+def _list(v) -> list:
+    """日志里的数组字段。不能用 `v or []` —— `True`/`8.0`/`"x"` 都是真值，会原样穿透。"""
+    return v if isinstance(v, list) else []
+
+
+def _dict(v) -> dict:
+    """日志里的对象字段。同上，不能用 `v or {}`。"""
+    return v if isinstance(v, dict) else {}
+
+
 def _short_id(s) -> str:
     """id 一律截断成前 8 位(§6 隐私)；空值 '-'，桶名占位符原样。"""
     if not s:
@@ -303,7 +341,7 @@ def match_runs_by_usage(runs, sessions, stats):
     for rid, r in runs.items():
         if r["hasMeta"] and not r["hasRun0"]:
             fp = _usage_fingerprint(r["agent"], r["model"], r["metaUsage"],
-                                    (r["metaUsage"] or {}).get("turns"))
+                                    _dict(r["metaUsage"]).get("turns"))
             if fp:
                 metas.append((rid, fp))
         elif r["hasRun0"] and not r["hasMeta"]:
@@ -409,7 +447,6 @@ def _new_session(sid, ev):
         "lastTs": None,
         "lastSeq": -1,
         "lastEvent": None,
-        "_ordered": [],
     }
 
 
@@ -424,8 +461,8 @@ def aggregate(events):
     daily = defaultdict(lambda: {k: 0 for k in USAGE_KEYS})
     bymodel = defaultdict(lambda: {k: 0 for k in USAGE_KEYS})
 
-    for ev in sorted(events, key=lambda e: (e.get("ts") or "", e.get("seq") or 0)):
-        sid = ev.get("sessionId") or "(无 sessionId)"
+    for ev in sorted(events, key=_sort_key):
+        sid = _sid(ev.get("sessionId")) or "(无 sessionId)"
         s = S.get(sid)
         if s is None:
             s = S[sid] = _new_session(sid, ev)
@@ -457,13 +494,13 @@ def aggregate(events):
             s["hasSessionEvent"] += 1
             if isinstance(ev.get("skillCount"), int):
                 s["skillCount"] = ev["skillCount"]
-            for sk in ev.get("skills") or []:
+            for sk in _list(ev.get("skills")):
                 if not isinstance(sk, dict):
                     continue
-                fp = sk.get("filePath") or sk.get("name")
+                fp = _label(sk.get("filePath") or sk.get("name"), "(无路径)")
                 if not fp:
                     continue
-                info = sk.get("sourceInfo") or {}
+                info = sk.get("sourceInfo") if isinstance(sk.get("sourceInfo"), dict) else {}
                 rec = s["skills"].setdefault(fp, {
                     "name": sk.get("name"),
                     "filePath": fp,
@@ -486,7 +523,7 @@ def aggregate(events):
             s["tokens"]["totalTokens"] += total
             day = _local_date(dt)
             slot = day.isoformat() if day else "(无 ts)"
-            model = ev.get("model") or "(未知模型)"
+            model = _label(ev.get("model"), "(未知模型)")
             for bucket in (daily[slot], bymodel[model]):
                 for k in TOKEN_KEYS:
                     bucket[k] += _num(u.get(k))
@@ -498,11 +535,11 @@ def aggregate(events):
                 s["lastStopReason"] = ev["stopReason"]
 
         elif kind == "tool_call":
-            name = ev.get("toolName") or "(未知工具)"
+            name = _label(ev.get("toolName"), "(未知工具)")
             s["tools"][name]["calls"] += 1
 
         elif kind == "tool_result":
-            name = ev.get("toolName") or "(未知工具)"
+            name = _label(ev.get("toolName"), "(未知工具)")
             t = s["tools"][name]
             t["results"] += 1
             if ev.get("isError") is True:
@@ -521,9 +558,6 @@ def aggregate(events):
                 "reason": ev.get("reason"),
                 "ts": ev.get("ts"),
             })
-
-        if isinstance(seq, int):
-            s["_ordered"].append((ev.get("ts") or "", seq, kind))
 
     return S, daily, bymodel
 
@@ -646,7 +680,8 @@ def build_data(args, entries, sessions, daily, bymodel, stats, events, subagents
     R = {"generatedAt": datetime.now().astimezone().isoformat(timespec="seconds"),
          "sources": [], "overview": {}, "tokensByDay": [], "tokensByModel": [],
          "topSessions": [], "byPerson": None, "tools": [], "skills": [],
-         "completion": {}, "contextPressure": {}, "cost": None, "observations": []}
+         "completion": {}, "contextPressure": {},
+         "cost": None, "observations": []}
 
     for path, label in entries:
         R["sources"].append({"dir": str(path), "label": label})
@@ -690,7 +725,7 @@ def build_data(args, entries, sessions, daily, bymodel, stats, events, subagents
         t = s["tokens"]
         R["topSessions"].append({
             "sessionId": s["sessionId"], "cwd": s["cwd"], "model": s["model"],
-            "type": (sid_types or {}).get(s["sessionId"]) or "父会话",
+            "type": _dict(sid_types).get(s["sessionId"]) or "父会话",
             **t, "cacheReadPct": _pct(t["cacheRead"], t["totalTokens"]),
             "settled": bool(s["settled"]),
         })
@@ -1012,13 +1047,13 @@ def render_subagents(sub) -> list:
     L.append(f"总 {_fmt(t['runs'])} 个 run：子代理占全部消耗 **{sub['auditedShare']}**"
              f"（审计侧子代理 {_fmt(sum(au.values()))} / 全部 {_fmt(sub['auditTotalTokens'])}）。")
     if sub.get("usageMatchedRuns"):
-        st = sub.get("stats") or {}
+        st = _dict(sub.get("stats"))
         L.append("")
         L.append(f"> 其中 {_fmt(sub['usageMatchedRuns'])} 个 run 的 meta 与 run-0 目录 **runId 对不上**，"
                  f"靠「角色+模型+五个数字」指纹唯一命中配对（`matchBy=usage`）；"
                  f"另有 未命中 {_fmt(st.get('fingerprintMiss', 0))} / 歧义放弃 {_fmt(st.get('fingerprintAmbiguous', 0))} 个。"
                  f"指纹配对是**启发式**，不保证与 runId join 等价。")
-    st = sub.get("stats") or {}
+    st = _dict(sub.get("stats"))
     if st.get("zeroTurns"):
         L.append("")
         L.append(f"> 另有 {_fmt(st['zeroTurns'])} 个 run 的 meta `turns=0` 且 token 全 0"
@@ -1130,7 +1165,9 @@ def render_markdown(R, args) -> str:
                  f"失败率分母只取 `tool_result`）。")
         L.append("")
 
-    # 6 skill 命中
+    # 6 上下文构成（阶段 3）
+
+    # 7 skill 命中
     L.append("## 6. skill 命中")
     L.append("")
     rows = []
@@ -1152,7 +1189,7 @@ def render_markdown(R, args) -> str:
              "命中次数 = 出现条数。来源取自 `sourceInfo.source`。")
     L.append("")
 
-    # 7 完成度
+    # 8 完成度
     L.append("## 7. 完成度")
     L.append("")
     c = R["completion"]
@@ -1172,7 +1209,7 @@ def render_markdown(R, args) -> str:
                             "是" if u["incomplete"] else "否"] for u in c["unsettled"]]))
         L.append("")
 
-    # 8 上下文压力
+    # 9 上下文压力
     L.append("## 8. 上下文压力")
     L.append("")
     cp = R["contextPressure"]
@@ -1197,7 +1234,7 @@ def render_markdown(R, args) -> str:
                             _fmt(g["cacheReadFirst"]), _fmt(g["cacheReadLast"])] for g in cp["growing"]]))
         L.append("")
 
-    # 9 成本
+    # 10 成本
     if R["cost"] is not None:
         L.append("## 9. 成本（折算）")
         L.append("")
@@ -1228,7 +1265,7 @@ def render_markdown(R, args) -> str:
                      "本报表里的 `结果字符数`、`systemPromptChars` 等是**字符口径**，两者不可互相换算，也不参与计费。")
             L.append("")
 
-    # 10 观察
+    # 11 观察
     L.append("## 10. 观察")
     L.append("")
     for i, o in enumerate(R["observations"], 1):
