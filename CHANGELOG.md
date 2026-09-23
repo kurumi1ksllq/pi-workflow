@@ -1,5 +1,35 @@
 # 变更记录
 
+## v1.13.1
+- **新增扩展 `context-thrift`：每次模型调用前剥掉「历史消息里重放出来的 reasoning 块」**。
+  这是团队目前最大的单项 token 浪费 —— pi 每次调用都把整段历史重新序列化发给上游，
+  而历史 assistant 消息里的 `thinking`（推理链 + 签名）在 OpenAI 兼容上游**入参里会被直接忽略**，
+  属于纯死重。实测某 821 轮会话里它占**全部上下文 token 的 29.3%**。
+- **开关默认只开第一层（剥离思考），另两层默认关着交付**：
+  - ① `keepRecent: 0` 全量剥离 —— **默认开**。之所以不「保留最近 N 条」：任何滑动边界都会让前缀
+    每轮变一次，直接打掉 prompt cache；全量剥离是幂等确定性变换，前缀从头到尾稳定。
+  - ② `toolPruning` 工具声明裁剪 —— **默认关**。裁错工具会让 agent 直接失去能力、故障难定位。
+    要开就在自己配置里改，并确保 `keep` 里有 `subagent`（默认名单已含）。
+  - ③ `toolOutputStub` 历史工具输出降级 —— **默认关**，同上。
+- **实测收益（同会话、同档位 A/B）**：cacheRead 63,872 → 42,752、未缓存 input 232 → 196，
+  上下文 64,104 → 42,948（**−33%**）。未缓存输入**没有上升** → 是缓存继续命中，不是把缓存读
+  换成了全价输入。离线自检 82 通过 / 0 失败。
+- 仅对 `openai-completions` / `openai-responses` 系 api 生效；**Anthropic / Bedrock 一律不碰**
+  （那两个体系要求回传 thinking 签名，剥了就报错）。
+- 团队成员**零动作**：包内 `extensions/*.ts` 由 pi 自动加载，配置从 `team/extensions/context-thrift.json`
+  补齐（只补缺，你调过的不动）。想关：把 `~/.pi/agent/extensions/context-thrift/config.json` 里
+  `enabled` 改 `false`，或启动前设 `PI_CONTEXT_THRIFT_ENABLED=0`。
+- **`pi-subagents` 0.70.0 → 0.70.1，修前台子代理（`async:false`）起不来报 `MODULE_NOT_FOUND`**。
+  根因在上游：`foreground/execution.js` 没把宿主 pi 的 SDK 注入子会话，前台子代理只好按裸
+  `import()` 解析 `@earendil-works/pi-coding-agent`，在「pi 装在扩展自己依赖树之外」的布局下必然失败
+  （async 路径有注入，所以只有前台中招，长期被误当成「团队包坏了」）。0.70.1 的 `child-session.js`
+  新增 `loadHostPiCodingAgent()`，按 宿主进程 → 环境变量 → 安装树 优先级解析宿主 SDK ——
+  这是上游对同一 bug 的官方修法（nicobailon/pi-subagents#2348）。
+- 影响面只有**显式要求同步返回**的委派（`async:false`）；pi-subagents 默认走 async，日常委派不受影响。
+- 0.70.1 移除的 `completionGuard` 设置与 `PI_SUBAGENTS_LLM_INTENT_ARBITER` 开关本团队未使用，
+  无需迁移（已确认 repo 与成员设置里均无引用）。
+- 验证：真机 `pi -p` 派 `async:false` scout，返回 `RESULT: 2`（修前 `MODULE_NOT_FOUND`）；async 路径回归正常。
+
 ## v1.13.0
 - **`team/RULES.md` 安全红线新增一条：不要按进程名杀 node**。pi 自身就是 `node.exe`
   （npm shim 跑 `dist/bundle/cli.js`），所以 `Get-Process node | Stop-Process -Force`、

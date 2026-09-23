@@ -9,7 +9,7 @@
 2. 全局装基线：
 
    ```bash
-   pi install git:github.com/kurumi1ksllq/pi-workflow@v1.13.0
+   pi install git:github.com/kurumi1ksllq/pi-workflow@v1.13.1
    ```
 
    **注意没有 `-l`** —— 这是全局安装，落到 `~/.pi/agent/settings.json`，
@@ -27,7 +27,7 @@
 **推荐写法，`git:` 前缀不能省：**
 
 ```
-git:github.com/<org>/pi-workflow@v1.13.0
+git:github.com/<org>/pi-workflow@v1.13.1
 ```
 
 省掉前缀 pi 会当本地目录，报 `Path does not exist: ...\github.com\org\pi-workflow` ——
@@ -136,7 +136,7 @@ node scripts/test-self-update.mjs
 一行命令，在隔离目录里模拟一个**全新成员**：
 
 ```bash
-bash scripts/simulate-member.sh v1.13.0
+bash scripts/simulate-member.sh v1.13.1
 ```
 
 它做的事：造一个独立的 agent 配置目录（不碰你本机的 `~/.pi/agent`）+
@@ -148,6 +148,7 @@ bash scripts/simulate-member.sh v1.13.0
 隔离目录的 `settings.json` 里出现 `subagents` 与 `compaction`、
 `extensions/pi-rtk-optimizer/config.json` 存在、`models.json` 里出现 `newapi` + 四个档位
 （且 `apiKey` 是 `$` 环境变量引用，成员自建的 provider 还在）、
+`extensions/context-thrift/config.json` 存在（含 `subagent` 的 keep 名单）、
 最后一步把 origin 换成带假 tag 的本地远端后**下次启动自动跟上了新 tag**。
 只看到包名没有路径 = 还在设置里没装上 —— 少了第二次启动。
 
@@ -159,7 +160,7 @@ bash scripts/simulate-member.sh v1.13.0
 
 ```bash
 SB='C:\Users\<你>\pi-check-agent'   # 隔离的 agent 目录，Windows 路径写法
-PI_CODING_AGENT_DIR="$SB" pi install git:github.com/kurumi1ksllq/pi-workflow@v1.13.0
+PI_CODING_AGENT_DIR="$SB" pi install git:github.com/kurumi1ksllq/pi-workflow@v1.13.1
 # 隔离目录不带凭据，启动前把 auth.json 拷进去（models.json 别拷：那正是要验的同步目标）
 PI_CODING_AGENT_DIR="$SB" pi -p ok    # 第一次：扩展写清单 + 补 rtk + 补共享设置 + 补模型配置
 PI_CODING_AGENT_DIR="$SB" pi list     # 应看到清单里的包都带路径
@@ -230,7 +231,7 @@ PI_CODING_AGENT_DIR="$SB" pi list     # 应看到清单里的包都带路径
 | --- | --- |
 | `skills/` | 按需加载的能力包。`00-core/` 全员共享，其余按角色分目录 |
 | `prompts/` | 斜杠命令，`review.md` → `/review` |
-| `extensions/` | `team-baseline.ts`（引导扩展：注入规范、补 MCP 基线、同步包清单、补共享设置、补模型配置、补扩展配置、补 rtk、自动跟最新 tag）+ `audit-log.ts`（审计日志，见下节） |
+| `extensions/` | `team-baseline.ts`（引导扩展：注入规范、补 MCP 基线、同步包清单、补共享设置、补模型配置、补扩展配置、补 rtk、自动跟最新 tag）+ `audit-log.ts`（审计日志，见下节）+ `context-thrift.ts`（剥离重放的历史思考，见下节） |
 | `team/` | 扩展的数据源：`RULES.md`（规范）+ `mcp.template.json`（MCP 基线）+ `packages.json`（第三方包清单）+ `agent-settings.json`（共享设置补丁）+ `models.template.json`（网关与档位别名，不含 key）+ `extensions/`（各扩展的默认配置） |
 | `tools/` | `rtk.exe`，`pi-rtk-optimizer` 需要的二进制，随包分发 |
 | `templates/` | 项目级配置模板 `project-settings.json`、项目侧哨兵 `project-AGENTS.md` |
@@ -280,6 +281,39 @@ echo '{"enabled": false}' > ~/.pi/agent/extensions/audit-log/config.json
 口径与缺口见 `docs/audit-log.md`，报表用法见 `docs/audit-report.md`。
 两条注意：按天的文件里**混着当天所有会话**，统计前先按 `sessionId` 过滤；
 审计日志是**索引 + 指标**，需要工具输出原文时用 `toolCallId` 回联 session jsonl。
+
+## 上下文瘦身（`context-thrift`）
+
+pi 每次模型调用都把**整段历史重新序列化**发给上游 —— 这是上下文雪球的本体。其中最大的一块死重是
+**历史 assistant 消息里的 `thinking`**（推理链 + 签名）：OpenAI 兼容上游在**入参里直接忽略**它，
+但 pi 照样每轮重发。实测一个 821 轮会话里它占**全部上下文 token 的 29.3%**，而且是每轮都白交。
+
+`extensions/context-thrift.ts` 在每次调用前把它们剥掉。**只对 `openai-completions` / `openai-responses`
+系 api 生效** —— Anthropic / Bedrock 要求回传 thinking 签名，剥了会报错，所以一律不碰。
+
+三层能力，**只有第一层默认开**：
+
+| 层 | 做什么 | 默认 | 为什么这个默认 |
+| --- | --- | --- | --- |
+| ① 剥离历史思考 | 剥掉重放的 `thinking` | **开** | `keepRecent: 0` 全量剥离。**不能留「最近 N 条」**：任何滑动边界都让前缀每轮变一次，直接打掉 prompt cache；全量剥离是幂等确定性变换，前缀从头到尾稳定 |
+| ② 工具声明裁剪 | 每轮少发几个用不到的工具定义 | 关 | 裁错工具会让 agent **直接失去能力**，而且故障难定位。要开自己改 |
+| ③ 历史工具输出降级 | 旧的工具输出换成占位 | 关 | 同上，会丢信息 |
+
+同会话同档位 A/B 实测（①）：上下文 64,104 → **42,948（−33%）**；未缓存输入 232 → 196，
+**没上升** → 是缓存继续命中，不是把缓存读换成了全价输入。
+
+配置：`~/.pi/agent/extensions/context-thrift/config.json`（首次启动从 `team/extensions/context-thrift.json`
+补一份，**只补缺** —— 你调过的不会被团队更新重置）。三种关法：
+
+```bash
+# 1) 改配置(整个扩展关掉)
+#    编辑 ~/.pi/agent/extensions/context-thrift/config.json → "enabled": false
+# 2) 环境变量逃生门(临时)
+PI_CONTEXT_THRIFT_ENABLED=0 pi
+# 3) 只开第二层时务必确认 keep 里有 subagent
+```
+
+自检：`node test-thrift.mjs`（在源工程 `pi-context-thrift/` 里，82 项）。
 
 ## 边界
 

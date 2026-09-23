@@ -116,7 +116,7 @@ try {
 }
 ' "$SB/agent/settings.json"
 echo "--- 扩展自己的配置 ---"
-for name in pi-rtk-optimizer audit-log; do
+for name in pi-rtk-optimizer audit-log context-thrift; do
 	if [ -f "$SB/agent/extensions/$name/config.json" ]; then
 		echo "  ✓ $name 默认配置已补"
 	else

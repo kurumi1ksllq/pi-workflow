@@ -1,0 +1,17 @@
+{
+  "_说明": "context-thrift 团队默认配置。只开第一层(剥离重放的历史思考),工具裁剪与工具输出降级默认关着交付 —— 裁错工具会让 agent 直接失去能力、故障难定位。",
+  "_怎么开第二层": "把 toolPruning.enabled 改成 true,并确保 keep 里有 subagent;改完重启 pi。",
+  "enabled": true,
+  "keepRecent": 0,
+  "toolPruning": {
+    "enabled": false,
+    "maxTools": 12,
+    "keep": ["bash", "read", "edit", "write", "todo", "subagent"]
+  },
+  "toolOutputStub": {
+    "enabled": false,
+    "keepRecentResults": 0,
+    "minChars": 2000
+  },
+  "logStats": false
+}
