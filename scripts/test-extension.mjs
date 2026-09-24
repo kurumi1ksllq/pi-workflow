@@ -91,6 +91,13 @@ check(
 	injected?.systemPrompt?.includes("不要按进程名杀 node"),
 	"注入段缺了「不要按进程名杀 node」这条红线",
 );
+// oracle 误用是全链路最贵的单项浪费（缓存读单价 166 倍），靠明文规矩拦，必须有断言护：
+// 一次误编辑删掉这段，全团队会重新拿 oracle 当 reviewer 用，且没有任何别的信号。
+// 断言串必须只属于这一段 —— 「oracle」「方案本身拿不准」在别处也出现，用它们做判据抓不住删除。
+check(
+	injected?.systemPrompt?.includes("一次 oracle 约等于"),
+	"注入段缺了「oracle 只用于方案拿不准」这条纪律",
+);
 
 // —— 场景 4：版本标识以设置里钉的 ref 为准 ——
 const versioned = readSettings();

@@ -1,10 +1,13 @@
 {
-  "_说明": "context-thrift 团队默认配置。只开第一层(剥离重放的历史思考),工具裁剪与工具输出降级默认关着交付 —— 裁错工具会让 agent 直接失去能力、故障难定位。",
-  "_怎么开第二层": "把 toolPruning.enabled 改成 true,并确保 keep 里有 subagent;改完重启 pi。",
+  "_说明": "context-thrift 团队默认配置。三层：①剥离重放的历史思考（默认开，实测 -33% 上下文）②工具声明裁剪（默认开）③历史工具输出降级（默认关）。",
+  "_第二层为什么默认开": "工具定义每轮重发、占长会话上下文约 18~20%。2026-09-23 起本机开启实测稳定，工具声明 41,609 → 22,832 字符（-45%）。keep 名单必须含 subagent 与 maxTools 兜底两道保险，subagent 永不会被裁。",
+  "_第二层的已知边界": "裁剪只作用于 provider 请求里的 tools 数组，提示词里的 <tools> 列表同步不了（pi 从自身 AgentSession 状态重渲染），模型可能以为被裁的工具还在。实测风险可控：启用期间没出现过调用被裁工具而失败。",
+  "_第三层为什么仍默认关": "历史工具输出降级会引入滑动边界，逐轮改变前缀 → 直接打掉 prompt cache（cacheRead 占全部 token 的 95%、单价只有全价的 2%）。要开必须先做 A/B，判据是未缓存 input 不上升，而不是总量下降。",
+  "_怎么关": "改自己机器上 ~/.pi/agent/extensions/context-thrift/config.json 的 enabled，或启动前设 PI_CONTEXT_THRIFT_ENABLED=0。",
   "enabled": true,
   "keepRecent": 0,
   "toolPruning": {
-    "enabled": false,
+    "enabled": true,
     "maxTools": 12,
     "keep": ["bash", "read", "edit", "write", "todo", "subagent"]
   },
