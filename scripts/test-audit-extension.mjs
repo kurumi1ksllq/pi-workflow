@@ -540,19 +540,31 @@ await handlers2.tool_execution_start({ type: "tool_execution_start", toolCallId:
 	const mkTurn = async (turnIndex, usage) => {
 		const h = await loadFresh();
 		const usageCtx = { ...ctx, getContextUsage: () => usage };
-		// 真机实测顺序（扩展探针）：turn_start → context → before_provider_request → turn_end。
-		// 这里必须照抄，否则测不出 turn_start 清空 stash 与 context 采集的相互作用。
+		// 真机实测顺序（扩展探针）：turn_start → context → context_with_system → before_provider_request → turn_end。
+		// ⚠️ pi 0.87.0 起 `context` 的 messages **不含 system 消息**（探针实测：只有 role/content/timestamp），
+		// 结构化 sections 走 `context_with_system`。旧 mock 把 system 塞进 context = 与真机不符，
+		// 曾因此让「sections 恒为 null」的 bug 全绿通过。这里照抄真机形态。
 		await h.turn_start({ type: "turn_start", turnIndex }, usageCtx);
 		await h.context({
 			type: "context",
-			messages: [
-				{
-					role: "system",
-					content: "",
-					sections: { preamble: "p".repeat(169), rules: SECRET_SECTION, skills: "s".repeat(8845) },
-				},
-			],
+			messages: [{ role: "user", content: "hello", timestamp: 0 }],
 		}, usageCtx);
+		// 新增事件：老版 pi 没有它，缺 handler 时该断言直接失败（比 TypeError 崩溃更可读）
+		const hasCws = typeof h.context_with_system === "function";
+		check(hasCws, "扩展没注册 context_with_system handler —— pi 0.87 起 sections 只能从这里拿到（场景 11）");
+		if (hasCws) {
+			await h.context_with_system({
+				type: "context_with_system",
+				messages: [
+					{
+						role: "system",
+						content: "",
+						sections: { preamble: "p".repeat(169), rules: SECRET_SECTION, skills: "s".repeat(8845) },
+					},
+					{ role: "user", content: "hello", timestamp: 0 },
+				],
+			}, usageCtx);
+		}
 		await h.before_provider_request({
 			type: "before_provider_request",
 			payload: {
@@ -649,9 +661,15 @@ await handlers2.tool_execution_start({ type: "tool_execution_start", toolCallId:
 		}, usageCtx);
 		await h.before_provider_request({ type: "before_provider_request", payload: { messages: [] } }, usageCtx);
 
-		// 轮 1：context 不带 sections
+		// 轮 1：context 不带 sections，且 context_with_system 也不带 → 必须写 null
 		await h.turn_start({ type: "turn_start", turnIndex: 1 }, usageCtx);
-		await h.context({ type: "context", messages: [{ role: "system", content: "" }] }, usageCtx);
+		await h.context({ type: "context", messages: [{ role: "user", content: "x" }] }, usageCtx);
+		if (typeof h.context_with_system === "function") {
+			await h.context_with_system({
+				type: "context_with_system",
+				messages: [{ role: "system", content: "" }, { role: "user", content: "x" }],
+			}, usageCtx);
+		}
 		await h.before_provider_request({ type: "before_provider_request", payload: { messages: [] } }, usageCtx);
 		await h.turn_end({ type: "turn_end", turnIndex: 1 }, usageCtx);
 

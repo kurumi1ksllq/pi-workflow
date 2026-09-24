@@ -143,16 +143,31 @@ pi 自动发现 `agentDir/extensions/` 下的直接 `.ts`/`.js` 文件，不用�
 `turn_start` → `context` → `before_provider_request` → `message_end`(assistant_usage) → `turn_end`。
 （`turn_start` 早于 `context`；早期文档曾把两者写反，导致「`turn_start` 清空 stash 会抹掉刚采到的数据」的误判。）
 
-**stash 只用「先置 null 再赋值」**：两个采集点都写成 `pendingSections = null;`
+**stash 只用「先置 null 再赋值」**：采集点写成 `pendingSections = null;`
 再 `pendingSections = sectionsChars(event);` —— **不用 `if (sec)` 条件赋值**。
 因为本轮采不到时条件赋值会沿用**上一轮**的值冒充本轮真值；而唯一的实际触发路径是
 「上一轮被中断、没跑到 `turn_end`」（正常路径 `turn_end` 的 `finally` 会清空）。
 `turn_end` 侧用 `try/finally` 保证清空，不依赖 `write()` 不抛异常。
 
+> ⚠️ **`sections` 必须挂 `context_with_system`，不能只挂 `context`（pi 0.87.0 breaking）。**
+> 0.87.0 起 `context` 事件的 `messages` **不含 system 消息**（真机探针：`messages[0]` 是第一条 user
+> 消息，只有 `role`/`content`/`timestamp`，没有 `sections`），结构化提示词改由 **0.87.0 新增的
+> `context_with_system`** 事件暴露 —— 它在 `context` 之后跑、拿到完整 transcript、必须保留 index 0
+> 的 system 消息。只挂 `context` 会**静默**把 `sections` 写成恒 null（2026-09-23 全天 1,250 条
+> `context_sample` 全 null，就是踩了这个）。两个事件都挂，且 `context_with_system` 侧**只在拿到
+> `sec` 时才覆盖**（否则会被 `context` 的 null 抹掉）；旧版 pi 没有该事件，`pi.on` 是纯注册、
+> 不会报错也不会触发，行为不变。
+> 离线测试的 mock **必须照抄真机形态**（`context` 只给 user 消息、`context_with_system` 给
+> system+user）—— 旧 mock 把 system 塞进 `context`，与真机不符，正是这个 bug 全绿通过的原因。
+
+**事件顺序（真机探针实测）**：`turn_start` → `context` → `context_with_system` →
+`before_provider_request` → `message_end`(assistant_usage) → `turn_end`。
+（`turn_start` 早于 `context`；早期文档曾把两者写反，导致「`turn_start` 清空 stash 会抹掉刚采到的数据」的误判。）
+
 | 字段 | 内容 | 取数来源 |
 | --- | --- | --- |
 | `turnIndex` | 第几轮 | `turn_end.turnIndex` |
-| `sections` | `{段名: 字符数}`，如 `preamble/tools/rules/docs/project_context/skills/cwd` | `context.messages[0].sections` 各值 `.length` |
+| `sections` | `{段名: 字符数}`，如 `preamble/tools/rules/docs/project_context/skills/cwd` | `context_with_system.messages[0].sections` 各值 `.length`（0.87 起；此前是 `context`） |
 | `sectionsTotalChars` | 上面各段之和 | 同上 |
 | `toolDefs` | `{count, chars}`，工具定义（每轮都发） | `before_provider_request.payload.tools` 的条数与序列化长度 |
 | `messages` | `{count, charsByRole}`，按 role 分字符 | 同上 `payload.messages`，每条的序列化长度 |
@@ -167,6 +182,10 @@ pi 自动发现 `agentDir/extensions/` 下的直接 `.ts`/`.js` 文件，不用�
 
 **实测（2026-09-22，`pi 0.86.1`，本机 5 轮 `pi -p`）**：`sectionsTotalChars` 恒为 **14,713**
 （`skills` 8845 最大）、`toolDefs` 恒为 **16 个 / 38,308 字符**、`messages.count` 2→4→6→8→10。
+
+**复测（2026-09-25，`pi 0.87.1`，修复后本机 `pi -p`）**：`sections` =
+`{preamble:169, tools:1122, rules:2613, docs:1259, project_context:1179, skills:8845, cwd:56}`、
+合计 **15,243**、`toolDefs` **6 个 / 22,832 字符**（工具裁剪生效）。
 
 > ⚠️ **`sections` 合计 ≠ 真实 system prompt 长度**。实测真实 system content = **22,455**，
 > `sections` 合计只有 14,713，差 7,742——**扩展注入的正文不进 `sections`**

@@ -1,5 +1,30 @@
 # 变更记录
 
+## v1.13.2
+- **`pi-subagents` 0.70.1 → 0.71.0，修「非 git 目录下 reviewer 必失败」**。
+  0.70.1 的 bug：内置 `reviewer` 的 `tools:` 白名单里有扩展工具 `watchdog_diff`，而它依赖
+  `git rev-parse --show-toplevel` 建基线 —— 在非 git 目录下拿不到，工具就没注册，启动期工具契约校验
+  直接把 run 标成 `exit=1` / `State: failed`。0.71.0 修法：无基线时 `watchdog_diff` 如实报告
+  「没有可用基线」而不是让整个 review 失败（nicobailon/pi-subagents#2422）。
+- ⚠️ **这个故障极具误导性**：run 状态是 `failed`，但子代理其实读到了文件、也产出了完整 review ——
+  结论本身可用，只有状态是错的。2026-09-21~23 的 48 个 subagent run 里有 31 个失败，其中这一类
+  占了多数；只看聊天里那句结论会以为一切正常，得翻 `subagent-artifacts/*_meta.json` 的
+  `exitCode`/`error` 才看得见。
+- 验证：隔离沙盒（`PI_CODING_AGENT_DIR`）+ 非 git 空目录派 reviewer —— 0.70.1 报
+  `requested unavailable child tools: watchdog_diff`，0.71.0 的 meta 为
+  `exit=0 / error='' / toolCount=2`（真调到了 watchdog_diff）。本机同法复验通过。
+- **`audit-log` 修 `context_sample.sections` 恒为 null（pi 0.87.0 breaking）**。
+  0.87.0 起 `context` 事件的 `messages` **不含 system 消息**，而旧代码从 `messages[0].sections` 取 ——
+  于是 2026-09-23 全天 1,250 条 `context_sample` 的 `sections` 全是 null（**静默**，不报错）。
+  结构化提示词改由 0.87.0 新增的 `context_with_system` 暴露：现在两个事件都挂，
+  `context_with_system` 侧只在拿到值时才覆盖（否则会被 `context` 的 null 抹掉）；旧版 pi 没有该事件，
+  `pi.on` 是纯注册，不报错也不触发，行为不变。
+- 同时修掉**为什么这个 bug 能全绿通过**：离线测试的 mock 把 system 消息塞进了 `context` 事件，
+  与真机相反。mock 已改成照抄真机形态（`context` 只给 user 消息、`context_with_system` 给 system+user），
+  并补了「扩展必须注册 context_with_system」断言 —— 负向验证（临时删掉 handler）确认测试会 exit 1。
+- 验证：真机 `pi -p` 后 `sections` =
+  `{preamble:169, tools:1122, rules:2613, docs:1259, project_context:1179, skills:8845, cwd:56}`（合计 15,243）。
+
 ## v1.13.1
 - **新增扩展 `context-thrift`：每次模型调用前剥掉「历史消息里重放出来的 reasoning 块」**。
   这是团队目前最大的单项 token 浪费 —— pi 每次调用都把整段历史重新序列化发给上游，

@@ -515,7 +515,15 @@ function buildConfig(event: any, ctx: any): Record<string, unknown> {
 //   prompt_cache_key 的值（只记有没有）/ sections 的正文（只记长度）。
 // 这里所有取值都只走 `.length` 或 `Object.keys()`，正文本身一次都不进记录。
 
-/** `context` 事件里的 `messages[0].sections` 是 `{段名: 正文}`，只留每段的字符数。 */
+/**
+ * `sections` 只存在于带 system 消息的那份 transcript 上，只留每段的字符数。
+ *
+ * pi 0.87.0 起（breaking）`context` 事件的 `messages` **不含 system 消息**，
+ * 所以 `messages[0]` 是第一条 user 消息、没有 `sections` —— 旧写法在这里恒返回 null。
+ * 结构化提示词（`SystemMessage.sections`）改由 `context_with_system` 事件可见，
+ * 它是 0.87.0 新增、在 `context` 之后跑、拿到完整 transcript 且必须保留 index 0 的 system 消息。
+ * 两个事件都挂：新版靠后者拿到真值，旧版（无该事件）保持原行为。
+ */
 function sectionsChars(event: any): { sections: Record<string, number>; total: number } | null {
 	const first = Array.isArray(event?.messages) ? event.messages[0] : null;
 	const sec = first?.sections;
@@ -654,9 +662,19 @@ export default function (pi: ExtensionAPI): void {
 	// 阶段 3：`turn_start` 早于 `context`（真机实测），sections 在这里拿；先存着，等 turn_end 一起落。
 	// 先置 null 再赋值：本轮没采到就写 null。不能用 `if (sec)`（采不到时沿用上一轮值冒充本轮），
 	// 也不能只依赖 turn_end 的 finally —— 若整轮被中断、turn_end 没触发，上一轮的值会漂到本轮。
+	//
+	// pi 0.87.0 起 `context` 的 messages 不含 system 消息 → 这里恒拿不到 sections。
+	// `context_with_system`（0.87.0 新增，在 context 之后跑）才有；它拿到完整 transcript，
+	// 负责补上。旧版 pi 没有该事件，注册了也不会触发，行为不变。
 	pi.on("context", guard("context", (event) => {
 		pendingSections = null;
 		pendingSections = sectionsChars(event);
+	}));
+
+	pi.on("context_with_system", guard("context_with_system", (event) => {
+		const sec = sectionsChars(event);
+		// 只在拿到了 sections 时才覆盖：避免新版下被 context 的 null 抹掉。
+		if (sec) pendingSections = sec;
 	}));
 
 	pi.on("before_provider_request", guard("before_provider_request", (event) => {
