@@ -1,8 +1,11 @@
 node_modules/
 __pycache__/
 
-# 给 pi 的本地需求书与进度文档，不进公开仓库
+# 本地工作产物：给 pi 的需求书、进度文档、会话交接 —— 留在工作区，不进公开仓库
+# （发版脚本遇到未跟踪文件会告警，列在这里就不会每次都提醒）
 docs/audit-log-spec.md
 docs/audit-report-spec.md
 docs/audit-optimize-spec.md
 docs/audit-progress.md
+docs/session-flow-spec.md
+team-pi-handover.md
