@@ -249,7 +249,9 @@ PI_CODING_AGENT_DIR="$SB" pi list     # 应看到清单里的包都带路径
 3. **把 `team/packages.json` 里的包补进全局设置** —— 只补不删、幂等；补了会提示重启
 4. **把 `team/agent-settings.json` 只补缺地并进全局设置** —— 成员自己设过的键不动
 5. **把 `team/models.template.json` 按 provider 并进全局 `models.json`** —— 缺的 provider 整段补，
-   已在则只补缺的字段 + 按 id 追加缺的档位；已有的档位定义、成员自建的 provider 一律不动
+   已在则只补缺的字段 + 按 id 追加缺的档位；已有的档位定义、成员自建的 provider 一律不动。
+   **一个例外**：档位的 `contextWindow` 正好等于某次改版前的旧模板值时会刷成现值
+   （成员自己调过的、哪怕只差 1，都不动）—— 否则团队改模板永远推不到老成员身上（v1.13.4 加的）
 6. **把 `team/extensions/<扩展名>.json` 补到扩展自己的配置位置** —— 目标已存在就完全不动
 7. **缺 rtk 时从 `tools/` 补一份到 npm 全局 bin** —— 补完用 `where` 验一次
 8. **跟远端最新 tag 对齐**（放在最后，本会话仍用旧版）—— 落后就 fetch + reset --hard，
