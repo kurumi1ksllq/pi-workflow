@@ -98,6 +98,17 @@ check(
 	injected?.systemPrompt?.includes("一次 oracle 约等于"),
 	"注入段缺了「oracle 只用于方案拿不准」这条纪律",
 );
+// review 轮次与边界这两条都是「跑起来慢/烧钱」的直接闸门，同样只能靠明文规矩拦：
+// 一次误编辑删掉，全团队又会把 reviewer 当循环用、又派无边界任务跑到超时。
+// 断言串必须只属于新加的那段 —— 「reviewer」「review」在文件别处也有，用它做判据抓不住删除。
+check(
+	injected?.systemPrompt?.includes("别把 `reviewer` 当循环用"),
+	"注入段缺了「review 只跑一次」这条纪律",
+);
+check(
+	injected?.systemPrompt?.includes("全程耗在模型生成上"),
+	"注入段缺了「派 reviewer 必须给边界」这条纪律",
+);
 
 // —— 场景 4：版本标识以设置里钉的 ref 为准 ——
 const versioned = readSettings();
