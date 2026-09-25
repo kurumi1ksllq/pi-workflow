@@ -343,6 +343,98 @@ check(
 	`team/agent-settings.json 的 defaultModel 写了 provider/id 形式：${sharedDm}（场景 11：只认裸 id）`,
 );
 
+// —— 场景 12：存量档位窗口迁移（2026-09-25 网关提到 512k）——
+// 背景：合并规则是「成员已有档位定义一律不动」，于是老成员 models.json 里旧模板写进去的
+// 128000 永远推不下去 —— 改模板只对新人生效。这一场景钉住三条：
+//   ① 正好等于旧值 → 刷成新值；② 成员自己调过的值 → 原样不动；③ 模板没改到的档位 → 不动。
+fs.rmSync(AGENT, { recursive: true, force: true });
+fs.mkdirSync(AGENT, { recursive: true });
+fs.writeFileSync(
+	modelsFile,
+	JSON.stringify(
+		{
+			providers: {
+				newapi: {
+					baseUrl: "http://my-own-proxy:3000/v1",
+					api: "openai-completions",
+					models: [
+						{ id: "tier-std", contextWindow: 128000 }, // 旧模板值 → 要刷成 512000
+						{ id: "tier-power", contextWindow: 200000 }, // 成员自己调过 → 不许动
+						{ id: "tier-max", contextWindow: 272000 }, // 旧模板值 → 要刷成 512000
+						{ id: "tier-free", contextWindow: 128000 }, // 旧模板值 → 要刷成 256000
+					],
+				},
+				mine: { baseUrl: "http://localhost:11434/v1", api: "openai-completions", models: [{ id: "local" }] },
+			},
+		},
+		null,
+		2,
+	),
+	"utf-8",
+);
+await load();
+const win = JSON.parse(fs.readFileSync(modelsFile, "utf-8")).providers.newapi.models;
+const winOf = (id) => win.find((m) => m.id === id)?.contextWindow;
+const tplWin = JSON.parse(fs.readFileSync(path.join(repoRoot, "team", "models.template.json"), "utf-8")).providers.newapi
+	.models;
+const tplWinOf = (id) => tplWin.find((m) => m.id === id)?.contextWindow;
+check(
+	winOf("tier-std") === tplWinOf("tier-std"),
+	`旧的 tier-std 窗口没被刷成模板现值：${winOf("tier-std")}（场景 12：存量迁移）`,
+);
+check(winOf("tier-max") === tplWinOf("tier-max"), `旧的 tier-max 窗口没被刷（场景 12）：${winOf("tier-max")}`);
+check(winOf("tier-free") === tplWinOf("tier-free"), `旧的 tier-free 窗口没被刷（场景 12）：${winOf("tier-free")}`);
+check(
+	winOf("tier-power") === 200000,
+	`覆盖了成员自己调过的窗口：${winOf("tier-power")}（场景 12：只改正好等于旧值的）`,
+);
+// 幂等：再跑一次不该改文件
+const winBefore2 = fs.readFileSync(modelsFile, "utf-8");
+await load();
+check(fs.readFileSync(modelsFile, "utf-8") === winBefore2, "窗口迁移不幂等：第二次启动又改了文件（场景 12）");
+
+// —— 场景 13：存量 compaction.reserveTokens 迁移 ——
+// 窗口提到 512k 后，触发点（= 窗口 − reserve）必须还给模型留得下最大的输出（模板里 tier-max 的 64000）。
+// compaction 也是「只补缺」，老成员设置里已有旧模板的 32768 —— 不迁移就等于触发点落在 480k。
+fs.rmSync(AGENT, { recursive: true, force: true });
+fs.mkdirSync(AGENT, { recursive: true });
+fs.writeFileSync(
+	settingsFile,
+	JSON.stringify({ compaction: { enabled: true, reserveTokens: 32768, keepRecentTokens: 20000 } }, null, 2),
+	"utf-8",
+);
+await load();
+const cm = readSettings().compaction;
+check(
+	cm.reserveTokens === sharedSettings.compaction.reserveTokens,
+	`旧的 reserveTokens 没被刷成模板值：${cm.reserveTokens}（场景 13：存量迁移）`,
+);
+check(cm.keepRecentTokens === 20000, `动了成员自己设的 keepRecentTokens：${cm.keepRecentTokens}（场景 13）`);
+
+// 成员自己设的 reserveTokens（不等于旧模板值）一律不动
+fs.rmSync(AGENT, { recursive: true, force: true });
+fs.mkdirSync(AGENT, { recursive: true });
+fs.writeFileSync(
+	settingsFile,
+	JSON.stringify({ compaction: { reserveTokens: 50000 } }, null, 2),
+	"utf-8",
+);
+await load();
+check(
+	readSettings().compaction.reserveTokens === 50000,
+	`覆盖了成员自己设的 reserveTokens：${readSettings().compaction.reserveTokens}（场景 13：判据要收紧）`,
+);
+
+// 模板卫生：窗口与压缩预留是一对数 —— 预留不许小于模板里最大的 maxTokens
+const tplParsed = JSON.parse(tplRaw);
+const maxOut = Math.max(
+	...tplParsed.providers.newapi.models.map((m) => (typeof m.maxTokens === "number" ? m.maxTokens : 0)),
+);
+check(
+	sharedSettings.compaction.reserveTokens >= maxOut,
+	`agent-settings.json 的 reserveTokens=${sharedSettings.compaction.reserveTokens} 小于模板最大 maxTokens=${maxOut} —— 压缩触发点离上限太近`,
+);
+
 console.log("设置里的 packages：", JSON.stringify(after.packages));
 console.log("注入段版本行：", injected4.systemPrompt.split("\n").find((l) => l.includes("pi-workflow")));
 console.log("共享设置补缺后：", JSON.stringify({ compaction: mine.compaction, subagents: mine.subagents }));

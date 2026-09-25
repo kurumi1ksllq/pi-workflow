@@ -173,6 +173,8 @@ function packageVersion(): string {
 /** 自检。返回问题列表，空数组 = 一切正常。 */
 function healthCheck(): string[] {
 	const problems: string[] = [];
+	// 模板里最大的 maxTokens，跨两个文件对账用（见本函数末尾）
+	let templateMaxOutput: number | undefined;
 	if (!fs.existsSync(rulesFile)) {
 		problems.push("team/RULES.md 不存在 -> 团队规范不会被注入");
 	} else if (!readIfExists(rulesFile)?.trim()) {
@@ -225,9 +227,39 @@ function healthCheck(): string[] {
 					);
 				}
 			}
+			// 上面已经在遍历档位，顺手记下「模板里最大的输出上限」——
+			// 压缩预留必须 ≥ 它，见文件末尾那句对账。
+			let maxOut = 0;
+			for (const provider of Object.values(parsed?.providers ?? {}) as any[]) {
+				for (const m of Array.isArray(provider?.models) ? provider.models : []) {
+					if (typeof m?.maxTokens === "number") maxOut = Math.max(maxOut, m.maxTokens);
+				}
+			}
+			templateMaxOutput = maxOut;
 		} catch {
 			problems.push("team/models.template.json 不是合法 JSON -> 模型配置同步被跳过");
 		}
+	}
+	// 窗口与压缩预留是一对数：压缩触发点 = contextWindow − reserveTokens。
+	// 预留小于「模板里最大的 maxTokens」时，触发那一刻没给模型留够输出空间 ——
+	// 真到上限会是上游报错，而不是提前压缩。两处配置分居两个文件，只能机械对账。
+	const sharedTpl = (() => {
+		const raw = readIfExists(agentSettingsFile);
+		if (!raw) return undefined;
+		try {
+			return JSON.parse(raw);
+		} catch {
+			return undefined;
+		}
+	})();
+	const sharedReserve = sharedTpl?.compaction?.reserveTokens;
+	const reserveFloor = templateMaxOutput ?? REQUIRED_RESERVE_MIN;
+	if (typeof sharedReserve === "number" && sharedReserve < reserveFloor) {
+		problems.push(
+			`team/agent-settings.json 的 compaction.reserveTokens=${sharedReserve} 低于下限 ${reserveFloor}` +
+				`（= models.template.json 里最大的 maxTokens）—— 压缩触发点离上限太近，` +
+				`到上限会被上游报错而不是提前压缩；模板改窗口时这个值必须同批改`,
+		);
 	}
 	return problems;
 }
@@ -389,6 +421,43 @@ const STALE_MODEL_MAP: Record<string, string> = {
 };
 
 /**
+ * 已知的「过期档位上下文窗口 → 新窗口」迁移表。
+ *
+ * 背景：合并规则里「成员已有档位定义一律不动」是为了不覆盖他自己调过的值，副作用是
+ * **团队改模板也推不下去** —— 老成员的 models.json 里睡着旧模板写进去的 128000，永远补不上。
+ * 2026-09-25 网关侧把三个付费档提到 512k 时就撞上这个：改模板只对新人生效。
+ *
+ * 判据收得很紧（和 STALE_MODEL_MAP 同一条思路）：**只有当前值正好等于旧模板发出去的
+ * 那个数字时才改**。成员自己调过的窗口（哪怕只差 1）一律不动 —— 我们判断不了那是手改还是残留。
+ * 只在我们自己 provider 段（模板里声明的那些）里找，成员自建 provider 一律不碰。
+ *
+ * ⚠️ 窗口改了必须同批改 `compaction.reserveTokens`（触发点 = 窗口 − reserve），
+ *    见 STALE_COMPACTION_RESERVE，两者是一对数。
+ */
+const STALE_CONTEXT_WINDOW: Record<string, { from: number; to: number }> = {
+	"tier-std": { from: 128_000, to: 512_000 },
+	"tier-power": { from: 128_000, to: 512_000 },
+	"tier-max": { from: 272_000, to: 512_000 },
+	"tier-free": { from: 128_000, to: 256_000 },
+};
+
+/**
+ * 压缩预留的定向迁移。理由同上：`compaction` 是「只补缺」，成员 settings 里已经有
+ * 团队旧模板写进去的 `reserveTokens: 32768`，模板改成 65536 对他毫无影响 ——
+ * 于是他的窗口变成 512k 而触发点还在 512k − 32k = 480k（93.8%），
+ * 压不回模型的最大输出（tier-max 的 64000），到上限会被上游直接报错。
+ *
+ * 同样只认「正好等于旧模板值」：成员自己填的数字一律不动。
+ */
+const STALE_COMPACTION_RESERVE: Record<number, number> = { 32768: 65536 };
+
+/**
+ * 新窗口下 reserveTokens 的下限 = 模板里最大的 maxTokens。
+ * 触发那一刻必须还给模型留得下它最大的输出，否则真到上限时是硬报错、不是提前压缩。
+ */
+const REQUIRED_RESERVE_MIN = 64_000;
+
+/**
  * 一次性修掉写错形式的 `defaultModel`。
  *
  * pi 的 `defaultModel` 只认**裸模型 id**（配 `defaultProvider` 消歧）。写成 `<provider>/<id>`
@@ -458,6 +527,46 @@ function mergeMissing(target: any, patch: any): boolean {
 }
 
 /**
+ * 把老成员残留的旧上下文窗口刷成新值（见 STALE_CONTEXT_WINDOW）。
+ *
+ * 只在**模板自己声明的 provider** 里动手，且三重判据全中才改：
+ *   ① 档位 id 在迁移表里；② 当前值 == 表里记的旧值；③ 模板里该档位的**现值** == 表里的新值
+ * 第三条是防迁移表本身过期 —— 表说「改成 512k」而模板已经被改成别的数时，谁也不该动。
+ */
+function migrateStaleContextWindows(providers: any, template: any): boolean {
+	let changed = false;
+	for (const [providerId, tplProvider] of Object.entries(template ?? {}) as [string, any][]) {
+		const target = providers?.[providerId];
+		if (!target || typeof target !== "object" || !Array.isArray(target.models)) continue;
+		const tplModels: any[] = Array.isArray(tplProvider?.models) ? tplProvider.models : [];
+		for (const model of target.models) {
+			const id = modelIdOf(model);
+			const stale = id ? STALE_CONTEXT_WINDOW[id] : undefined;
+			if (!stale) continue;
+			if (model.contextWindow !== stale.from) continue;
+			const tplEntry = tplModels.find((m) => modelIdOf(m) === id);
+			if (tplEntry?.contextWindow !== stale.to) continue;
+			model.contextWindow = stale.to;
+			changed = true;
+		}
+	}
+	return changed;
+}
+
+/**
+ * 把老成员残留的旧 `compaction.reserveTokens` 刷成新值（见 STALE_COMPACTION_RESERVE）。
+ * 只认「正好等于旧模板值」—— 成员自己填的数字一律不动。
+ */
+function migrateStaleCompactionReserve(settings: any): boolean {
+	const current = settings?.compaction?.reserveTokens;
+	if (typeof current !== "number") return false;
+	const next = STALE_COMPACTION_RESERVE[current];
+	if (next === undefined) return false;
+	settings.compaction.reserveTokens = next;
+	return true;
+}
+
+/**
  * 团队共享设置（team/agent-settings.json）→ 全局 ~/.pi/agent/settings.json。
  *
  * 只补缺，理由和 packages 一样：成员可能自己调过 compaction 或给某个 agent 换过模型，
@@ -484,11 +593,14 @@ function syncAgentSettings(): SettingsSync {
 		}
 	}
 	const filled = mergeMissing(settings, patch);
-	// 顺序有意：先补缺（新缺的键写进去的就是档位别名），再迁移成员本地残留的旧真实模型名，
+	// 顺序有意：先补缺（新缺的键写进去的就是档位别名），再迁移成员本地残留的旧真实模型名、
+	// 旧窗口（模板改过、但「已有档位不动」推不下去的那种）、旧压缩预留，
 	// 最后修写错形式的 defaultModel（会静默落到列表首位，见该函数注释）。
+	// 迁移都在补缺之后：先让该有的键存在，再判断哪些值需要刷。
 	const migrated = migrateStaleModels(settings);
+	const migratedReserve = migrateStaleCompactionReserve(settings);
 	const fixedDefault = migrateBrokenDefaultModel(settings);
-	if (!filled && !migrated && !fixedDefault) return "none";
+	if (!filled && !migrated && !migratedReserve && !fixedDefault) return "none";
 	try {
 		fs.mkdirSync(path.dirname(file), { recursive: true });
 		fs.writeFileSync(file, JSON.stringify(settings, null, 2) + "\n", "utf-8");
@@ -606,7 +718,10 @@ function syncModelsConfig(): ModelsSync {
 	}
 
 	const changed = mergeModelsTemplate(models.providers, template);
-	if (!changed) return "none";
+	// 存量迁移：老成员的 models.json 里睡着旧模板写进去的窗口（「已有档位不动」推不下去），
+	// 这里只把**正好等于旧值**的那些刷成模板现值。见 STALE_CONTEXT_WINDOW。
+	const migratedWindows = migrateStaleContextWindows(models.providers, template);
+	if (!changed && !migratedWindows) return "none";
 	try {
 		fs.mkdirSync(path.dirname(file), { recursive: true });
 		fs.writeFileSync(file, JSON.stringify(models, null, 2) + "\n", "utf-8");

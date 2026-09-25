@@ -1,11 +1,12 @@
 {
   "_说明": "团队共享的 pi 全局设置补丁（落到 ~/.pi/agent/settings.json）。扩展只补缺：成员已经自己设过的键一律不动，也不删任何东西。以 _ 开头的键只是给人看的，不会写进设置。放这里的应该是「全员必须一致」的设置项 —— subagents 里的模型名指向团队网关的档位别名（tier-*），不是真实模型名：网关那边换后端模型时，这里和成员机器都不用改。成员如果不用这个网关，把对应项删掉再发版。",
   "_defaultModel 为什么要写": "defaultModel 必须是**裸模型 id**（配 defaultProvider 消歧）。写成 `newapi/tier-std` 这种 provider/id 形式时 pi 解析不到，会**静默回退到模型列表的第一个**——曾因此让默认档落到每账户每天只有 100 次请求的免费档上（2026-09-23）。这里给新成员补一份正确的默认值；已有成员写错的那种形式由扩展的一次性迁移改回来。",
+  "_reserveTokens 为什么是 65536": "pi 的自动压缩触发点 = contextWindow − reserveTokens（源码 `shouldCompact`）。基准是 **tier-max 的 maxTokens=64000**：触发那一刻必须还给模型留得下它最大的输出（64k），否则真到上限时会被上游直接报错，而不是提前压缩。所以 reserveTokens 不许小于「模板里最大的 maxTokens」。窗口从 128k 提到 512k 时这个值要同批改（32768 → 65536，触发点在 ~448k = 87.5%），改一边不改另一边 = 触发比例悄悄漂掉。定向迁移见扩展里的 STALE_COMPACTION_RESERVE。`keepRecentTokens` 不是阈值，它只决定压缩后留多少原文不总结，暂不动。",
   "defaultProvider": "newapi",
   "defaultModel": "tier-std",
   "compaction": {
     "enabled": true,
-    "reserveTokens": 32768,
+    "reserveTokens": 65536,
     "keepRecentTokens": 20000
   },
   "subagents": {

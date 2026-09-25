@@ -115,7 +115,7 @@ git 源同样要钉：是 tag 就写 `@v1.2.3`，只有主干可跟就写完整 
 ```json
 {
   "_说明": "给人看的，不会写进设置（以 _ 开头的键一律跳过）",
-  "compaction": { "enabled": true, "reserveTokens": 32768, "keepRecentTokens": 20000 },
+  "compaction": { "enabled": true, "reserveTokens": 65536, "keepRecentTokens": 20000 },
   "subagents": {
     "disableThinking": true,
     "agentOverrides": { "oracle": { "model": "tier-max" } }

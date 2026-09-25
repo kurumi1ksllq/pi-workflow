@@ -9,7 +9,7 @@
 2. 全局装基线：
 
    ```bash
-   pi install git:github.com/kurumi1ksllq/pi-workflow@v1.13.3
+   pi install git:github.com/kurumi1ksllq/pi-workflow@v1.13.4
    ```
 
    **注意没有 `-l`** —— 这是全局安装，落到 `~/.pi/agent/settings.json`，
@@ -27,7 +27,7 @@
 **推荐写法，`git:` 前缀不能省：**
 
 ```
-git:github.com/<org>/pi-workflow@v1.13.3
+git:github.com/<org>/pi-workflow@v1.13.4
 ```
 
 省掉前缀 pi 会当本地目录，报 `Path does not exist: ...\github.com\org\pi-workflow` ——
@@ -136,7 +136,7 @@ node scripts/test-self-update.mjs
 一行命令，在隔离目录里模拟一个**全新成员**：
 
 ```bash
-bash scripts/simulate-member.sh v1.13.3
+bash scripts/simulate-member.sh v1.13.4
 ```
 
 它做的事：造一个独立的 agent 配置目录（不碰你本机的 `~/.pi/agent`）+
@@ -160,7 +160,7 @@ bash scripts/simulate-member.sh v1.13.3
 
 ```bash
 SB='C:\Users\<你>\pi-check-agent'   # 隔离的 agent 目录，Windows 路径写法
-PI_CODING_AGENT_DIR="$SB" pi install git:github.com/kurumi1ksllq/pi-workflow@v1.13.3
+PI_CODING_AGENT_DIR="$SB" pi install git:github.com/kurumi1ksllq/pi-workflow@v1.13.4
 # 隔离目录不带凭据，启动前把 auth.json 拷进去（models.json 别拷：那正是要验的同步目标）
 PI_CODING_AGENT_DIR="$SB" pi -p ok    # 第一次：扩展写清单 + 补 rtk + 补共享设置 + 补模型配置
 PI_CODING_AGENT_DIR="$SB" pi list     # 应看到清单里的包都带路径
@@ -196,7 +196,7 @@ PI_CODING_AGENT_DIR="$SB" pi list     # 应看到清单里的包都带路径
 | --- | --- | --- |
 | **第三方 pi 包**（要团队一起装的扩展） | `team/packages.json`，**一律写死版本号**（`npm:foo@1.2.3` / `git:host/org/repo@<tag 或 commit>`） | 扩展补进**全局** `~/.pi/agent/settings.json`；旧的同名条目（不带版本）会被替换成钉版本的 |
 | **共享的全局设置**（`subagents` 模型路由、`compaction` 等） | `team/agent-settings.json` | 扩展**只补缺**地并进全局 `settings.json`：成员自己设过的键一个都不动 |
-| **团队模型配置**（网关地址 + 档位别名） | `team/models.template.json`，**`apiKey` 只能写 `$环境变量`** | 扩展按 provider 合并进全局 `models.json`：provider 缺就整段补，已在则只补缺的字段、按 id 追加缺的档位，已有的档位定义与成员自建的 provider 一律不动 |
+| **团队模型配置**（网关地址 + 档位别名） | `team/models.template.json`，**`apiKey` 只能写 `$环境变量`** | 扩展按 provider 合并进全局 `models.json`：provider 缺就整段补，已在则只补缺的字段、按 id 追加缺的档位，已有的档位定义与成员自建的 provider 一律不动。**唯一例外**：档位的 `contextWindow` 正好等于某次改版前的旧模板值时会刷成现值（成员自己调过的、哪怕只差 1，都不动）—— 否则团队改模板永远推不到老成员身上 |
 | **扩展自己的配置文件**（`pi-rtk-optimizer` 这类把配置放自己目录的） | `team/extensions/<扩展名>.json` | 扩展补到 `<agent dir>/extensions/<扩展名>/config.json`，**目标存在就完全不动** |
 | **项目级设置**（compaction 等） | 各项目 `.pi/settings.json`，可从 `templates/project-settings.json` 抄 | 项目负责人手工放一次 |
 | 团队自己的 skill / prompt / 扩展 / 规范 | 包内对应目录 | 升级团队包 |
