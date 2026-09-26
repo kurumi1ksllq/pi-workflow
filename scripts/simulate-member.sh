@@ -177,6 +177,20 @@ else
 fi
 
 echo
+echo "--- /audit 命令能不能用（成员拿到的那份，不是工作副本）---"
+CLONE_EARLY="$SB/agent/git/github.com/kurumi1ksllq/pi-workflow"
+PROBE="$(dirname "$0")/probe-audit-command.mjs"
+if [ -f "$PROBE" ]; then
+	node "$PROBE" "$CLONE_EARLY" "$SB/agent/audit/logs" "$SB/home" "$SB/agent"
+	probe_rc=$?
+	if [ "$probe_rc" -ne 0 ]; then
+		echo "  ⚠ /audit 命令验证未通过（exit=$probe_rc）—— 成员敲这个命令会失败"
+	fi
+else
+	echo "  （没找到 $PROBE，跳过）"
+fi
+
+echo
 echo "=== 7/7 自动更新（跟远端最新 tag）==="
 CLONE="$SB/agent/git/github.com/kurumi1ksllq/pi-workflow"
 STATE="$SB/agent/extensions/team-baseline/update-state.json"
