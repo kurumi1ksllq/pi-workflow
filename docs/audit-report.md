@@ -22,6 +22,7 @@ python ... --json                                                           # �
 python ... --out report.md                                                  # 写文件而不是 stdout
 python ... --prices prices.json                                             # 折算成本
 python ... --sessions-dir D:/sessions                                       # 换子代理产物目录
+python ... --model-map alias.json                                           # 手工指定「别名→真实模型」映射（见 §2.1）
 python ... --no-subagents                                                   # 不扫子代理产物
 python ... --session 01a0c209 --show-args                                   # 打印 argsPreview/promptPreview 原文
 ```
@@ -38,13 +39,53 @@ python ... --session 01a0c209 --show-args                                   # �
   `True`/`8.0`/`"x"` 都是真值会原样穿透。具体见 §10「脏值健壮性」。
 - 纯离线、无交互、无网络,可被 cron 直接调
 
+### 2.1 「按模型」表如何归并（别名 → 档位）
+
+**要回答的问题**：哪个**档位**在烧 token。而同一档位在数据里有多个名字 —— 运行时用别名
+（`tier-std`），子代理 `meta.json` 带 provider 前缀（`newapi/tier-power`），上游响应又给真实模型名
+（`deepseek/deepseek-v4.1-flash`）。不归并的话，每个成员的「按模型」表都虚拆成 4 行以上，
+看不出钱花在哪。
+
+**映射从数据推导，不硬编码**。权威来源是会话 jsonl 里**同一条 assistant 消息**上的两个字段：
+
+```json
+{"message": {"role": "assistant", "model": "tier-std", "responseModel": "deepseek/deepseek-v4.1-flash"}}
+```
+
+| 步骤 | 做法 |
+| --- | --- |
+| 扫描集 | `<sessions>/**/*.jsonl`，**只排除** `_fork-backup*` 与 `<父会话>/<runId>/run-0/session.jsonl`。`subagent-artifacts/*.jsonl` **要算进去** —— `tier-power → zai/glm-5.3-flash` 这种配对只在那儿有 |
+| 同别名多个真实名 | 取**出现次数最多**的，并在表尾注明歧义（歧义组数 + 少数派） |
+| 未命中映射的名字 | **单独成行**并在表尾计数上报，**不静默归入「(未知模型)」** |
+| `--model-map FILE` | JSON `{"tier-std": "deepseek/deepseek-v4.1-flash"}`；给定时**完全替代**自动推导。读不到该文件→打提示并**回退到自动推导**，不中断 |
+| 行名 | 取**档位别名**（`tier-std`），不是上游真名 —— 报告要回答的是「哪个档位在烧」，真名只是它背后的实现 |
+
+**守恒是硬约束**：归并**只改分组，不改总量**。`sum(按模型表 total)` 与 `overview.totalTokens`
+必须逐字节相等（`--self-test` 已固化这条断言）。
+
+归一化规则（`_norm_meta_model`，实测踩过）：
+
+| 输入 | 归一到 | 原因 |
+| --- | --- | --- |
+| `newapi/tier-power` | `tier-power` | 子代理 `meta.json` 的 `model` 带 provider 前缀（实测 33 次）。**只有 2 段** |
+| `newapi/z-ai/glm-5.3-flash` | `z-ai/glm-5.3-flash` | 同上，剥第一段 |
+| `zai/glm-5.3-flash` | `z-ai/glm-5.3-flash` | 上游拼法漂移，三种拼法实际同一模型 |
+| `zai-org/glm-5.3-flash` | `z-ai/glm-5.3-flash` | 同上 |
+
+⚠ **剥前缀的判据是「第一段是已知 provider 名」，不是「段数 ≥ 3」** —— 后者会漏掉
+`newapi/tier-power` 这种 2 段写法（自检阶段实际抓到过这个 bug）。provider 名单同样从数据里采
+（assistant 消息的 `provider` 字段），网关改名也不会漏判。
+
+⚠ **拼法统一必须在剥前缀之前**：否则 `zai/glm-5.3-flash` 会被当成 provider 前缀剥成
+`glm-5.3-flash`，丢掉组织段。
+
 ## 2. 报表结构(固定顺序)
 
 | # | 段落 | 内容 |
 | --- | --- | --- |
 | 1 | 概览 | 时间范围、文件数、总行数、`skippedLines`、会话数、事件数、**事件类型分布**、不完整会话数、seq 缺口数、总 token |
-| 2 | token 分布 | 按天 / 按模型 / Top 10 会话（含**类型**列：`父会话` / `子代理:<角色>`）；每张表 `input`/`cacheRead`/`cacheWrite`/`output`/`reasoning`/`total` + `cacheRead` 占比 |
-| 3 | 子代理 | 按 角色 × 模型：run 数、数字口径、审计/meta token/turns、审计侧来源、对账；表尾合计 + 占比（见 §5） |
+| 2 | token 分布 | 按天 / 按模型 / Top 10 会话（含**类型**列：`父会话` / `子代理:<角色>`）；每张表 `input`/`cacheRead`/`cacheWrite`/`output`/`reasoning`/`total` + `cacheRead` 占比。**按模型表已做别名归并**（见 §2.1） |
+| 3 | 子代理 | 按 角色 × 模型：run 数、数字口径、审计/meta token/turns、审计侧来源、对账；表尾合计 + 占比（见 §5）；另有一行**归因覆盖率**与本轮到次清单（见 §5.4） |
 | 4 | 按人 | 仅多目录/label 时:token 六字段、会话数、工具调用数、失败率 |
 | 5 | 工具 | 每工具:调用次数、成功/失败、失败率、平均/最长耗时、结果字符数 |
 | 6 | 上下文构成 | 每会话:**轮数**、固定税(字符)、工具定义(字符)、首轮/末轮增长(字符)、每轮平均 input+缓存读、固定税估算占比;表下写口径与字符→token 比例、对账偏差(见 §9) |
@@ -179,6 +220,48 @@ spec 的表格设计是**一行一个 run**（那样「run 数」列恒为 1，�
   （概览/其它段落仍是过滤后的口径，子代理段是全量口径，故段内注明）
 
 > 拿同一份日志跑两次（有/无 `--no-subagents`），概览总 token 必须相同——`--self-test` 里断言了这一点。
+
+### 5.4 子代理归因：挂到父会话的第几轮
+
+上面回答「花了多少」，这节回答「**哪一轮派了谁**」。每个 run 会尝试三条路径定位父会话与轮次，
+**按可靠度排序、命中即停**，结果写进 `--json` 的 `parentSessionId` / `parentTurnIndex`：
+
+| 序 | 路径 | 做法 | 本机实测命中 |
+| --- | --- | --- | --- |
+| 1 | `metaTranscriptPath` | `meta.json` 的 `transcriptPath` 定位项目编码目录，再到 `<sessions>/<项目>/<父会话目录>/<runId>/run-0/` 把父会话找出来（三层上级即父会话目录名） | 46 |
+| 2 | `toolResultRunId` | 父会话 `toolResult` 正文里的 `Run: <runId>` → 它的 `toolCallId` → 反查同 id 的 `toolCall` 属于哪条 assistant 消息 → 所属轮次（**最可靠**，runId 就在 toolResult 里，天然带 toolCallId） | 5 |
+| 3 | `sessionPath` | `toolResult` 正文里 `Session: ...\<runId>\run-0\...` 的路径反推 | 2 |
+
+⚠ **`Run:` 只在 `toolResult` 的返回正文里**，发起子代理的那条 `toolCall` 的 `arguments` 里**没有 runId**
+（实测只有 `agent`/`task`/`context`/`async`/`timeoutMs`）。所以关联方向是「结果 → 调用」，不是「调用 → 结果」。
+
+⚠ **不用文件名/路径做启发式猜测** —— 实测会全部落空并给出相反结论。
+
+**轮次口径**：一段会话里第几条 `user` 消息。同一个 runId 在多轮里可能被重复播报
+（状态刷新型 `toolResult`），**首次出现**的那一轮才算发起轮次。
+
+**覆盖率必须上报，并不得含糊**。Markdown 里固定一行：
+
+```text
+子代理归因:命中 53/69 (76.8%)（路径1:46 / 路径2:5 / 路径3:2）
+```
+
+`--json` 里在 `subagents.attribution`：
+
+```json
+{"hit": 53, "total": 69,
+ "byPath": {"metaTranscriptPath": 46, "toolResultRunId": 5, "sessionPath": 2},
+ "unattributed": 16}
+```
+
+`hit + unattributed == total` 是硬约束（`--self-test` 已断言）。**覆盖不全时报表不会说「全部归因完成」** ——
+未归因的那些 run 表下会直说「三条路径都没命中……这些 run **不算作已归因**」。
+
+> 本机 69 个 run 里只有 53 个能归因，剩下的多是较早的产物：它们的父会话已不在
+> `~/.pi/agent/sessions/` 里了（会话文件被清理），不是路径写错。
+
+三个 id 空间互不相等是归因难的根源（实测）：`meta.runId` 与 `run-0` 目录名只有 30/56 对得上，
+`Run:` 里的 uuid **从不**出现在会话目录名里。所以任何一条路径都不能单独承诺全命中。
 
 ## 6. 隐私
 

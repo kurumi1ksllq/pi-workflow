@@ -28,10 +28,23 @@ DEFAULT_DIR = Path.home() / ".pi" / "agent" / "audit" / "logs"
 
 # 子代理 runId 就是 pi-subagents 生成的 uuid(36 字符)，两种产物都拿它做合并键
 RUN_ID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+# `toolResult` 正文里的子会话路径：`...\<runId>\run-0\session.jsonl`（路径2 的兜底，§2.4）
+SESSION_PATH_RE = re.compile(RUN_ID_RE.pattern + r"[\\/]+run-0")
 # 「审计侧」列的三个取值（docs/audit-report.md §5）
 SUBAGENT_AUDITED = "已入审计(标记为子代理)"
 SUBAGENT_NOT_AUDITED = "未入审计"
 SUBAGENT_META_ONLY = "仅 meta"
+
+# 子代理归因的三条路径名，顺序与 §2.4 的可靠度排序一致
+ATTR_PATHS = ("metaTranscriptPath", "toolResultRunId", "sessionPath")
+ATTR_PATH_LABEL = {"metaTranscriptPath": "路径1", "toolResultRunId": "路径2",
+                   "sessionPath": "路径3"}
+
+# 已知 provider 名（`newapi` / `commandcode` …），由 `scan_session_models` 从
+# assistant 消息的 `provider` 字段填进来 —— **不硬编码**，网关改名/换名也不会漏判。
+# 它只影响 `_norm_meta_model` 的前缀剥除：`newapi/tier-power` 只有 2 段，
+# 光靠「段数≥3」的旧规则剥不掉它。
+KNOWN_PROVIDERS = set()
 
 
 # --------------------------------------------------------------------------- #
@@ -182,6 +195,8 @@ def parse_args(argv=None):
                    help="子代理产物目录（默认 ~/.pi/agent/sessions，PI_CODING_AGENT_DIR 兜底）")
     p.add_argument("--no-subagents", action="store_true",
                    help="不扫子代理产物（子代理段退化成一句提示）")
+    p.add_argument("--model-map", metavar="FILE",
+                   help="别名→真实模型的映射 JSON（给定时完全替代自动推导）")
     p.add_argument("--self-test", action="store_true",
                    help="对真实日志跑一遍内建断言（spec §8 对账基线），不打印报表")
     return p.parse_args(argv)
@@ -226,13 +241,40 @@ def _run_id_from(name: str):
     return m.group(0) if m else None
 
 
-def _norm_meta_model(model):
-    """meta.model 带 provider 前缀(`newapi/deepseek/x`)，审计侧的 `model` 不带。
-    只在拿不到审计侧模型时兜底：剥掉第一段。拿得到审计侧就以审计侧为准。"""
+def _toolresult_text(m: dict) -> str:
+    """把 `toolResult` 的 content 拍平成纯文本，用于找 `Run:` / `Session:`（不落盘，只看不发）。"""
+    c = m.get("content")
+    if isinstance(c, str):
+        return c
+    if isinstance(c, list):
+        return "\n".join(x.get("text", "") for x in c if isinstance(x, dict))
+    return ""
+
+
+# 上游模型名的拼法漂移：三种写法实际同一个模型(§2.2 实测)。
+# 用正则锚在**段首**，这样 `newapi/zai/x` 这种被 provider 包着的也能中。
+MODEL_SPELLING_RE = re.compile(r"(^|/)(?:zai|zai-org)/")
+
+
+def _norm_meta_model(model, providers=None):
+    """模型名归一化(§2.2)—— meta.model / 审计侧 / 上游响应名三者要能对上。
+
+    两步，顺序不能反：
+    - **先统一拼法**：`zai/x` / `zai-org/x` → `z-ai/x`（锚在段首，`newapi/zai/x` 也中）。
+      必须在剥前缀**之前**做，否则 `zai/x` 会被当成 provider 前缀剥成 `x`，丢掉组织段。
+    - **再剥 provider 前缀**：判据是「第一段是已知 provider 名」（`newapi` / `commandcode`…，
+      名单由 `scan_session_models` 从数据里采出来，见 `KNOWN_PROVIDERS`）。
+      ⚠ 不能只看「段数≥3」：`newapi/tier-power` 只有 2 段，旧规则会漏掉它（自检抓到过）。
+      段数≥3 作为兼容保留（前缀名未采到时的保守行为）。
+    """
     if not isinstance(model, str) or not model:
         return None
-    parts = model.split("/")
-    return "/".join(parts[1:]) if len(parts) >= 3 else model
+    norm = MODEL_SPELLING_RE.sub(r"\1z-ai/", model)
+    parts = norm.split("/")
+    provs = KNOWN_PROVIDERS if providers is None else providers
+    if parts[0] in provs or len(parts) >= 3:
+        norm = "/".join(parts[1:])
+    return norm or None
 
 
 def scan_subagents(sessions_dir: Path, sessions=None):
@@ -255,7 +297,9 @@ def scan_subagents(sessions_dir: Path, sessions=None):
         return runs.setdefault(rid, {
             "runId": rid, "agent": None, "model": None, "metaUsage": None,
             "childSessionId": None, "hasMeta": False, "hasRun0": False,
-            "matchBy": None,
+            "matchBy": None, "transcriptPath": None,
+            "parentSessionId": None, "parentTurnIndex": None, "parentPath": None,
+            "attrPath": None,
         })
 
     for p in sorted(sessions_dir.rglob("subagent-artifacts/*_meta.json")):
@@ -280,6 +324,8 @@ def scan_subagents(sessions_dir: Path, sessions=None):
             r["agent"] = doc["agent"]
         if isinstance(doc.get("model"), str):
             r["model"] = doc["model"]
+        if isinstance(doc.get("transcriptPath"), str):
+            r["transcriptPath"] = doc["transcriptPath"]
         u = doc.get("usage")
         if isinstance(u, dict):
             usage = {k: _num(u.get(k)) for k in TOKEN_KEYS}
@@ -373,6 +419,314 @@ def match_runs_by_usage(runs, sessions, stats):
         run0s = [(x, f) for x, f in run0s if x != rid_c]
 
 
+def _iter_session_lines(path: Path):
+    """逐行读会话 jsonl；坏行/空行跳过（含正文的会话文件不整份读进内存）。"""
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(obj, dict):
+                    yield obj
+    except OSError as exc:
+        print(f"[warn] 读不了 {path}：{exc}", file=sys.stderr)
+
+
+def _parent_session_files(sessions_dir: Path):
+    """父会话文件 = `<sessions>/<项目编码>/<会话>.jsonl`（实测就这一层，不用递归）。
+
+    排除三类不是父会话的：`_fork-backup*`（浏览器转储，本机占了全目录 90% 体积）、
+    `<父会话>/<runId>/run-0/session.jsonl`（子会话）、`subagent-artifacts/`（子代理转储）。
+    """
+    if not sessions_dir.is_dir():
+        return []
+    out = []
+    for proj in sorted(sessions_dir.iterdir()):
+        if not proj.is_dir():
+            continue
+        for f in sorted(proj.glob("*.jsonl")):
+            if "_fork-backup" in f.name:
+                continue
+            out.append(f)
+    return out
+
+
+def _model_scan_files(sessions_dir: Path):
+    """推导别名映射的扫描集（§2.1）：`<sessions>/**/*.jsonl`，只排除两类。
+
+    - `_fork-backup*`：浏览器转储，不是运行时记录（本机占了全目录 90% 体积）
+    - `<父会话>/<runId>/run-0/session.jsonl`：子会话本体（同 `runId` 目录下）
+
+    **`subagent-artifacts/*.jsonl` 要算进去** —— `tier-power → zai/glm-5.3-flash`
+    这种配对只出现在子代理产物里；只扫父会话会漏掉它，那一行永远并不了。
+    代价：这 51 MB 文本要过一遍（本机实测 0.3~1s）。
+    """
+    if not sessions_dir.is_dir():
+        return []
+    out = []
+    for f in sessions_dir.rglob("*.jsonl"):
+        p = str(f).replace(os.sep, "/")
+        if "_fork-backup" in f.name or "/run-0/" in p:
+            continue
+        out.append(f)
+    return sorted(out)
+
+
+def build_model_map(pairs, manual=None):
+    """别名 → 真实模型的映射（§2.1）。
+
+    `pairs` 是 `(model, responseModel)` 计数：**权威来源是会话 jsonl 同一条 assistant 消息上的
+    这两个字段**（`model` = 请求用的档位别名，`responseModel` = 上游真实名），从数据推导，不硬编码。
+    `manual` 给定时**完全替代**自动推导（§2.1 第 3 条）。
+
+    返回 `(map, info)`；`map` 的键是归一化后的运行时名字，值是归一化后的真实名。
+    同一别名映射到多个真实名时取**出现次数最多**的，并在 `info["ambiguous"]` 里注明。
+    """
+    ambiguous, unmatched, alias_pairs = {}, Counter(), 0
+    if manual is not None:
+        m = {}
+        skipped = []
+        for k, v in manual.items():
+            nk = _norm_meta_model(k)
+            if not isinstance(v, str) or not v.strip():
+                skipped.append(str(k))
+                continue
+            m[nk] = _norm_meta_model(v.strip())
+        return m, {"source": "manual", "pairs": len(pairs),
+                   "skipped": skipped, "ambiguous": {}, "unmatched": {}}
+
+    votes = defaultdict(Counter)          # 归一化运行时名 → Counter(归一化真实名)
+    for (model, resp), n in pairs.items():
+        if not model or not resp:
+            continue                       # responseModel 为 null：不参与映射推导(§2.1)
+        alias_pairs += 1
+        key = _norm_meta_model(model)
+        # 键已经是真实模型名（与响应名同类、带 `/`）时不必映射，记「未命中」让它原样成行
+        votes[key][_norm_meta_model(resp)] += n
+
+    result = {}
+    for key, counter in votes.items():
+        if len(counter) == 1:
+            target = next(iter(counter))
+        else:
+            target = counter.most_common(1)[0][0]
+            ambiguous[key] = {"picked": target, "count": counter[target],
+                              "others": {k: v for k, v in counter.items() if k != target}}
+        # 真实名已知的（自带 `/` 或 `:`）不建映射，让它们原样保留成行(§5.4)
+        if "/" in key or ":" in key:
+            continue
+        result[key] = target
+
+    matched = sum(n for (model, resp), n in pairs.items()
+                  if model and resp and _norm_meta_model(model) in result)
+    unmatched = {"pairsWithoutResponseModel":
+                 sum(n for (model, resp), n in pairs.items() if model and not resp),
+                 "responseModels": sum(1 for (m, r) in pairs if not m)}
+    return result, {"source": "auto", "pairs": len(pairs), "aliasPairs": alias_pairs,
+                    "derived": result, "aliasHits": matched,
+                    "ambiguous": ambiguous, "unmatched": unmatched}
+
+
+def scan_session_models(sessions_dir: Path):
+    """扫会话 jsonl，收集 `(model, responseModel)` 配对并推导**族映射**（§2.1）。
+
+    返回 `(families, pairs, stats)`：
+    - `families`：运行时名字 → **族名**。同一上游模型的别名与真实名归一族，
+      族名优先取**别名**（`tier-std`），因为报告要回答的是「哪个档位在烧 token」
+      （§0 动机）—— 真实名只是它背后的上游模型。推不出别名时（本机只有真实名，
+      比如本机已无 `tier-max` 的记录）族名就是真实名自身，原样成行（§5.4）。
+    - `pairs`：`Counter[(model, responseModel)]`，给 `build_model_map` 推导 别名→真实名
+    """
+    pairs = Counter()
+    stats = {"files": 0, "assistantMsgs": 0, "withResponseModel": 0, "providers": []}
+    providers = set()
+    for f in _model_scan_files(sessions_dir):
+        stats["files"] += 1
+        for obj in _iter_session_lines(f):
+            # 两种形状：会话 jsonl 用 `type`，子代理产物用 `recordType`（实测）
+            if (obj.get("type") or obj.get("recordType")) != "message":
+                continue
+            m = obj.get("message")
+            if not isinstance(m, dict) or m.get("role") != "assistant":
+                continue
+            stats["assistantMsgs"] += 1
+            if isinstance(m.get("provider"), str) and m["provider"]:
+                providers.add(m["provider"])
+            model, resp = m.get("model"), m.get("responseModel")
+            if model:
+                pairs[(model, resp if isinstance(resp, str) and resp else None)] += 1
+            if isinstance(resp, str) and resp:
+                stats["withResponseModel"] += 1
+
+    # provider 名单收集完再聚类 —— `_norm_meta_model` 靠它剥 `newapi/` 这类前缀（§2.2）
+    KNOWN_PROVIDERS.update(providers)
+    stats["providers"] = sorted(providers)
+
+    # 按「上游真实名」聚类：同族的每个名字都指向族名（别名优先）
+    by_real = defaultdict(Counter)
+    for (model, resp), n in pairs.items():
+        if not model or not isinstance(resp, str) or not resp:
+            continue
+        by_real[_norm_meta_model(resp)][_norm_meta_model(model)] += n
+
+    families = {}
+    for real, members in by_real.items():
+        aliases = [(m, n) for m, n in members.items() if m != real and "/" not in m]
+        # 别名形态（不带 `/`）里取出现次数最多的作为族名；没有别名就用真实名本身
+        family = max(aliases, key=lambda kv: kv[1])[0] if aliases else real
+        families.setdefault(real, family)
+        for m in members:
+            families.setdefault(m, family)
+    # 没参与任何配对的名字（如 responseModel 恒 null 的档位）原样成行(§5.4)
+    for (model, _resp) in pairs:
+        if model:
+            families.setdefault(_norm_meta_model(model), _norm_meta_model(model))
+    return families, pairs, stats
+
+
+def families_from_map(mapping, auto):
+    """族映射 = 别名→族名。`mapping` 是别名→真实名（§2.1 的映射）。
+
+    `families` 的族名必须取**别名**那一侧（`tier-std` 而不是它的上游真名），
+    否则报告答不了「哪个档位在烧 token」这个原始问题（§0）。
+    """
+    fam = dict(auto)
+    for alias, real in (mapping or {}).items():
+        fam[_norm_meta_model(alias)] = _norm_meta_model(alias)
+        if isinstance(real, str) and real:
+            # 真实名也指回别名；别名缺位时（本机只有真名）才拿真名当族名
+            fam[_norm_meta_model(real)] = fam.get(_norm_meta_model(alias), _norm_meta_model(alias))
+    return fam
+
+
+def merge_model_buckets(buckets, canonical_map):
+    """按归并映射把「按模型」桶并族（§5.2 第 3 条）。
+
+    **只改分组，不改总量**：所有键都只做「旧桶取数 → 新桶累加」，没有一步乘除或去重。
+    顺序有关：目标键自己可能也在 `buckets` 里，先冻结成 `raw` 再写回，避免重复累加。
+    """
+    raw = {k: dict(v) for k, v in buckets.items()}
+    out = defaultdict(lambda: dict.fromkeys(USAGE_KEYS, 0))
+    for key, bucket in raw.items():
+        target = canonical_map.get(_norm_meta_model(key), key)
+        for k in USAGE_KEYS:
+            out[target][k] += _num(bucket.get(k))
+    return dict(out)
+
+
+def attribute_subagents(runs, sessions_dir: Path):
+    """把子代理 run 挂回父会话的具体轮次（§2.4）。
+
+    三条路径按可靠度排序，命中即停，并把命中的路径名写进 `attrPath`：
+
+    1. `meta.json` 的 `transcriptPath` 所在目录（`<项目编码>/subagent-artifacts/`）与
+       `<项目编码>/<父会话>/<runId>/run-0/` 是同一个项目编码目录下的兄弟 —— 用那个
+       runId 目录找到父会话文件名
+    2. 父会话 `toolResult` 正文里的 `Run: <runId>` → 它的 `toolCallId` → 反查同 id 的
+       `toolCall` 属于哪条 assistant 消息 → 所属轮次（**最可靠**，runId 就在 toolResult 里，
+       天然带 toolCallId）
+    3. `toolResult` 正文里 `Session: ...` 路径带 `<runId>/run-0` 的，用那个 uuid 反推
+
+    **不用文件名/路径做启发式猜测** —— 实测会全部落空并给出相反结论（§2.4 末）。
+    返回统计 `stats`，它也会写回每个 run 的 `parentSessionId` / `parentTurnIndex`；
+    没命中的字段**保持 `null` 并计数**，不瞎填。
+    """
+    stats = {"files": 0, "toolResults": 0, "hit": 0, "total": 0, "unattributed": 0,
+             "byPath": dict.fromkeys(ATTR_PATHS, 0),
+             "parents": 0}
+    if not runs:
+        return stats
+    alive = [r for r in runs.values() if not r.get("pairedWith")]
+    stats["total"] = len(alive)          # `hit + unattributed == total` 是硬约束(§5.3 第 5 条)
+    if not alive:
+        return stats
+
+    # —— 路径 1：`transcriptPath` 的项目编码目录 → `<项目>/<父会话目录>/<runId>/run-0/` —— #
+    # 实测层级就四段（别少写一层，见 §3.4）：
+    # `<sessions>/<项目编码>/<父会话目录>/<runId>/run-0/session.jsonl`，
+    # 所以三个上级目录就是**父会话目录名**，它的兄弟 `同名.jsonl` 才是父会话文件。
+    by_run_dir = defaultdict(list)
+    if sessions_dir.is_dir():
+        for p in sessions_dir.glob("*/*/*/run-0/session.jsonl"):
+            parts = p.relative_to(sessions_dir).parts       # (项目, 父会话目录, runId, run-0, file)
+            if len(parts) >= 5:
+                by_run_dir[parts[2]].append(sessions_dir / parts[0] / f"{parts[1]}.jsonl")
+    path1 = {}
+    for r in alive:
+        rid = r["runId"]
+        cands = [p for p in by_run_dir.get(rid, []) if p.is_file()]
+        if len(cands) == 1:
+            path1[rid] = cands[0]
+
+    def _session_id_of(path: Path):
+        """父会话 jsonl 首行 `type=session` 的 `id`；读不到返回 None。"""
+        for obj in _iter_session_lines(path):
+            if obj.get("type") == "session" and obj.get("id"):
+                return obj["id"]
+        return None
+
+    # —— 路径 2/3：扫父会话 jsonl，建 runId → (父会话, 轮次) 与 runId → 父会话 —— #
+    run_index, sess_index = {}, {}
+    for f in _parent_session_files(sessions_dir):
+        stats["files"] += 1
+        sid, turn, call_turn = None, 0, {}
+        for obj in _iter_session_lines(f):
+            if obj.get("type") == "session" and sid is None and obj.get("id"):
+                sid = obj["id"]
+            if obj.get("type") != "message":
+                continue
+            m = obj.get("message")
+            if not isinstance(m, dict):
+                continue
+            role = m.get("role")
+            if role == "user":
+                turn += 1                       # 轮次 = 第几条 user 消息（含 toolResult 回灌的那类）
+            elif role == "assistant":
+                for c in _list(m.get("content")):
+                    if isinstance(c, dict) and c.get("type") == "toolCall" and c.get("id"):
+                        call_turn[c["id"]] = turn
+            elif role == "toolResult":
+                stats["toolResults"] += 1
+                text = _toolresult_text(m)
+                if not text:
+                    continue
+                tcid = m.get("toolCallId")
+                for rid in set(RUN_ID_RE.findall(text)) if "Run:" in text else ():
+                    # 同一个 runId 在多轮里重复播报（状态刷新型 toolResult），**首次出现**才算发起轮次
+                    run_index.setdefault(rid, (sid, obj.get("id"), call_turn.get(tcid, turn), f))
+                for cand in SESSION_PATH_RE.findall(text):
+                    rid2 = _run_id_from(cand)
+                    if rid2:
+                        sess_index.setdefault(rid2, (sid, f))
+        if sid:
+            stats["parents"] += 1
+
+    for r in alive:
+        rid = r["runId"]
+        if rid in path1:
+            r["parentPath"], r["attrPath"] = str(path1[rid]), "metaTranscriptPath"
+            r["parentSessionId"] = _session_id_of(path1[rid])
+        elif rid in run_index:
+            sid, tid, tix, path = run_index[rid]
+            r["parentSessionId"], r["parentTurnIndex"] = sid, tix
+            r["parentPath"], r["attrPath"] = str(path), "toolResultRunId"
+        elif rid in sess_index:
+            sid, path = sess_index[rid]
+            r["parentSessionId"], r["parentPath"] = sid, str(path)
+            r["attrPath"] = "sessionPath"
+        if r["attrPath"]:
+            stats["hit"] += 1
+            stats["byPath"][r["attrPath"]] += 1
+        else:
+            stats["unattributed"] += 1
+    return stats
+
+
 def discover_files(dir_path: Path, since, until):
     """按文件名日期预筛；名字不是 YYYY-MM-DD.jsonl 的照收，交给 ts 过滤。"""
     if not dir_path.is_dir():
@@ -429,7 +783,7 @@ def _new_session(sid, ev):
         "cwd": ev.get("cwd"),
         "model": ev.get("model"),
         "provider": ev.get("provider"),
-        "tokens": {k: 0 for k in USAGE_KEYS},
+        "tokens": dict.fromkeys(USAGE_KEYS, 0),
         "usageCalls": 0,
         "settled": 0,
         "hasSessionEvent": 0,
@@ -458,8 +812,8 @@ def _usage_total(u):
 def aggregate(events):
     """按 sessionId 分组聚合。返回 (sessions dict, daily, bymodel)。"""
     S = {}
-    daily = defaultdict(lambda: {k: 0 for k in USAGE_KEYS})
-    bymodel = defaultdict(lambda: {k: 0 for k in USAGE_KEYS})
+    daily = defaultdict(lambda: dict.fromkeys(USAGE_KEYS, 0))
+    bymodel = defaultdict(lambda: dict.fromkeys(USAGE_KEYS, 0))
 
     for ev in sorted(events, key=_sort_key):
         sid = _sid(ev.get("sessionId")) or "(无 sessionId)"
@@ -562,7 +916,7 @@ def aggregate(events):
     return S, daily, bymodel
 
 
-def build_subagents(audit_sessions, runs, enabled, sessions_dir):
+def build_subagents(audit_sessions, runs, enabled, sessions_dir, attribution=None):
     """子代理段数据（docs/audit-report.md §5）。
 
     口径铁则：**子代理段只做标签化，不往总量里加一次**。
@@ -583,8 +937,8 @@ def build_subagents(audit_sessions, runs, enabled, sessions_dir):
         key = (agent or "未知", model or "(未知)")
         return groups.setdefault(key, {
             "role": agent or "未知", "model": model, "runs": 0,
-            "metaUsage": {k: 0 for k in TOKEN_KEYS}, "metaTurns": 0,
-            "auditUsage": {k: 0 for k in TOKEN_KEYS}, "auditTurns": 0,
+            "metaUsage": dict.fromkeys(TOKEN_KEYS, 0), "metaTurns": 0,
+            "auditUsage": dict.fromkeys(TOKEN_KEYS, 0), "auditTurns": 0,
             "auditedRuns": 0, "metaOnlyRuns": 0,
             "mismatch": False, "usageMatched": 0,
         })
@@ -642,8 +996,8 @@ def build_subagents(audit_sessions, runs, enabled, sessions_dir):
 
     totals = {
         "runs": 0,
-        "metaOnly": {k: 0 for k in TOKEN_KEYS}, "metaOnlyRuns": 0,
-        "audit": {k: 0 for k in TOKEN_KEYS}, "auditedRuns": 0,
+        "metaOnly": dict.fromkeys(TOKEN_KEYS, 0), "metaOnlyRuns": 0,
+        "audit": dict.fromkeys(TOKEN_KEYS, 0), "auditedRuns": 0,
     }
     for r in runs.values():
         if r.get("pairedWith"):
@@ -670,6 +1024,16 @@ def build_subagents(audit_sessions, runs, enabled, sessions_dir):
         "auditedShare": _pct(sum(totals["audit"].values()), audit_total),
         "metaOnlyTotal": sum(totals["metaOnly"].values()),
         "usageMatchedRuns": sum(1 for r in runs.values() if r.get("matchBy") == "usage"),
+        "attribution": attribution or {"hit": 0, "total": 0,
+                                        "byPath": dict.fromkeys(ATTR_PATHS, 0),
+                                        "unattributed": 0},
+        "attributed": [{
+            "runId": r["runId"], "agent": r.get("agent"),
+            "model": _norm_meta_model(r.get("model")),
+            "parentSessionId": r.get("parentSessionId"),
+            "parentTurnIndex": r.get("parentTurnIndex"),
+            "attrPath": r.get("attrPath"),
+        } for r in sorted(runs.values(), key=lambda x: x["runId"]) if r.get("attrPath")],
     }, type_by_sid
 
 
@@ -727,7 +1091,7 @@ def build_context_composition(events, max_sessions=10):
             }
 
         per_turn = [chars_of(s) for s in samples]
-        for s, c in zip(samples, per_turn):
+        for s, c in zip(samples, per_turn, strict=False):
             tk = s.get("contextTokens")
             if isinstance(tk, (int, float)) and not isinstance(tk, bool) and c["total"] > 0:
                 all_turn_ratios.append(tk / c["total"])
@@ -790,7 +1154,8 @@ def build_context_composition(events, max_sessions=10):
 # --------------------------------------------------------------------------- #
 # 报表数据
 # --------------------------------------------------------------------------- #
-def build_data(args, entries, sessions, daily, bymodel, stats, events, subagents=None, sid_types=None):
+def build_data(args, entries, sessions, daily, bymodel, stats, events, subagents=None,
+               sid_types=None, model_map=None, modelmap_info=None):
     R = {"generatedAt": datetime.now().astimezone().isoformat(timespec="seconds"),
          "sources": [], "overview": {}, "tokensByDay": [], "tokensByModel": [],
          "topSessions": [], "byPerson": None, "tools": [], "skills": [],
@@ -800,7 +1165,7 @@ def build_data(args, entries, sessions, daily, bymodel, stats, events, subagents
     for path, label in entries:
         R["sources"].append({"dir": str(path), "label": label})
 
-    grand = {k: 0 for k in USAGE_KEYS}
+    grand = dict.fromkeys(USAGE_KEYS, 0)
     for s in sessions.values():
         for k in USAGE_KEYS:
             grand[k] += s["tokens"][k]
@@ -825,9 +1190,23 @@ def build_data(args, entries, sessions, daily, bymodel, stats, events, subagents
     for day in sorted(daily):
         d = daily[day]
         R["tokensByDay"].append({"day": day, **d, "cacheReadPct": _pct(d["cacheRead"], d["totalTokens"])})
-    for model in sorted(bymodel, key=lambda m: -bymodel[m]["totalTokens"]):
-        m = bymodel[model]
+
+    # 「按模型」表归族(§2.1)：同一上游模型的别名与真实名并成一行，行名取**档位别名**
+    # （报告要回答「哪个档位在烧 token」，见 §0）。归并在**桶级**发生，
+    # `overview.totalTokens` 不走这条路 —— 它由 aggregate 直接逐条累加(§5.2 第 4 条)。
+    fam = model_map or {}
+    merged = merge_model_buckets(bymodel, fam)
+    # 未命中映射的名字**单独成行并在表尾计数上报**，不许静默归入「(未知模型)」(§2.1 第 4 条)
+    unmapped = sorted(k for k in merged if _norm_meta_model(k) not in fam)
+    for model in sorted(merged, key=lambda m: -merged[m]["totalTokens"]):
+        m = merged[model]
         R["tokensByModel"].append({"model": model, **m, "cacheReadPct": _pct(m["cacheRead"], m["totalTokens"])})
+    R["modelMap"] = {
+        "rowsBefore": len(bymodel), "rowsAfter": len(merged),
+        "groups": [{"from": k, "to": fam[_norm_meta_model(k)]}
+                   for k in sorted(bymodel) if fam.get(_norm_meta_model(k), k) != k],
+        "unmapped": unmapped, "info": modelmap_info or {},
+    }
 
     # 每会话 skillCount（§8.2 验收要能直接读到）
     R["skillCounts"] = [{
@@ -846,7 +1225,7 @@ def build_data(args, entries, sessions, daily, bymodel, stats, events, subagents
 
     # 按人(仅给了 label 时)
     if any(label for _, label in entries):
-        persons = defaultdict(lambda: {"tokens": {k: 0 for k in USAGE_KEYS},
+        persons = defaultdict(lambda: {"tokens": dict.fromkeys(USAGE_KEYS, 0),
                                        "sessions": set(), "toolCalls": 0,
                                        "toolResults": 0, "toolErrors": 0})
         for s in sessions.values():
@@ -924,7 +1303,7 @@ def build_data(args, entries, sessions, daily, bymodel, stats, events, subagents
     for s in sessions.values():
         if len(s["compacts"]) >= 2:
             series = s["cacheReadSeries"]
-            if len(series) >= 2 and all(b >= a for a, b in zip(series, series[1:])) and series[-1] > series[0]:
+            if len(series) >= 2 and all(b >= a for a, b in zip(series, series[1:], strict=False)) and series[-1] > series[0]:
                 growing.append({"sessionId": s["sessionId"], "compacts": len(s["compacts"]),
                                 "cacheReadFirst": series[0], "cacheReadLast": series[-1]})
     R["contextPressure"] = {
@@ -1129,7 +1508,7 @@ def render_subagents(sub) -> list:
         elif has_meta:
             nums, src, turns = m, "meta", r["metaTurns"]
         else:
-            nums, src, turns = {k: 0 for k in TOKEN_KEYS}, "—", 0
+            nums, src, turns = dict.fromkeys(TOKEN_KEYS, 0), "—", 0
         if has_meta and has_audit:
             # 两侧都有数字才逐项比对；只一侧有数字无从对账，记「—」不评好坏
             if r["mismatch"]:
@@ -1161,6 +1540,29 @@ def render_subagents(sub) -> list:
     L.append("")
     L.append(f"总 {_fmt(t['runs'])} 个 run：子代理占全部消耗 **{sub['auditedShare']}**"
              f"（审计侧子代理 {_fmt(sum(au.values()))} / 全部 {_fmt(sub['auditTotalTokens'])}）。")
+
+    # 子代理归因覆盖率(§5.3 第 6 条)——必须成行上报，覆盖不全不许说「全部归因完成」
+    attr = _dict(sub.get("attribution"))
+    by_path = _dict(attr.get("byPath"))
+    if attr:
+        total_n, hit = _num(attr.get("total")), _num(attr.get("hit"))
+        detail = " / ".join(f"{ATTR_PATH_LABEL[k]}:{_fmt(by_path.get(k, 0))}" for k in ATTR_PATHS)
+        L.append("")
+        L.append(f"子代理归因:命中 {hit}/{total_n} ({_pct(hit, total_n)})（{detail}）")
+        rows = []
+        for a in sub.get("attributed") or []:
+            rows.append([_short_id(a["runId"]), a.get("agent") or "-",
+                         _code(a.get("model")), _short_id(a.get("parentSessionId")),
+                         "-" if a.get("parentTurnIndex") is None else _fmt(a["parentTurnIndex"]),
+                         _code(a.get("attrPath"))])
+        if rows:
+            L.append("")
+            L.append(md_table(["run", "角色", "模型", "父会话", "发起轮次", "归因路径"], rows))
+        if total_n > hit:
+            L.append("")
+            L.append(f"> 未归因 {_fmt(total_n - hit)} 个 run —— 三条路径都没命中"
+                     "（子代理产物可能早于本机保留的会话文件，或父会话不在 "
+                     "`~/.pi/agent/sessions/` 下）。这些 run **不算作已归因**。")
     if sub.get("usageMatchedRuns"):
         st = _dict(sub.get("stats"))
         L.append("")
@@ -1279,6 +1681,28 @@ def render_markdown(R, args) -> str:
     L.append("")
     L.append(md_table(_token_headers("模型"),
                       [_token_row(m["model"], m, m["cacheReadPct"]) for m in R["tokensByModel"]] or [["(无数据)"]]))
+    mm = _dict(R.get("modelMap"))
+    if mm:
+        before, after = _num(mm.get("rowsBefore")), _num(mm.get("rowsAfter"))
+        if before != after:
+            # 表尾上报归并（§2.1 第 2 条）——行名取**档位别名**，报告要回答「哪个档位在烧 token」
+            pairs_txt = "；".join(f"`{g['from']}` → `{g['to']}`" for g in mm.get("groups") or [])
+            note = f"> 已归并 {_fmt(before - after)} 行（{before} → {after}）：{pairs_txt}。"
+            amb = _dict(_dict(mm.get("info")).get("ambiguous"))
+            if amb:
+                note += (" 歧义 " + _fmt(len(amb)) + " 组（同一别名映射到多个真实名，取出现次数最多的）："
+                         + "；".join(f"`{k}` → `{_dict(v).get('picked')}`" for k, v in amb.items()) + "。")
+            L.append("")
+            L.append(note)
+        unmapped = mm.get("unmapped") or []
+        if unmapped:
+            # 未命中映射的名字单独成行并在表尾计数上报，不许静默归入「(未知模型)」(§2.1 第 4 条)
+            L.append("")
+            L.append(f"> 未命中映射 {_fmt(len(unmapped))} 个模型名（单独成行，未归入「(未知模型)」）："
+                     + "、".join(_code(m) for m in unmapped) + "。")
+        if not _num(_dict(mm.get("info")).get("withResponseModel")):
+            L.append("")
+            L.append("> 本机会话 jsonl 里没有任何 `responseModel`，别名归并未生效（该字段缺失时不做归并，见 §5.4）。")
     L.append("")
     L.append("### 2.3 Top 10 会话")
     L.append("")
@@ -1511,17 +1935,83 @@ def self_test() -> int:
         return 0
     # 占比要用**整个日志文件**的口径，不能只看上面那一个会话
     assert all(r["hasMeta"] or r["hasRun0"] for r in runs.values()), "每个 run 至少得有一侧产物"
-    sub, sid_types = build_subagents(sessions_all, runs, True, default_sessions_dir())
+    sub, sid_types = build_subagents(sessions_all, runs, True, default_sessions_dir(),
+                                     attribute_subagents(runs, default_sessions_dir()))
     assert sub["totals"]["runs"] == len(runs) - sub["usageMatchedRuns"], "run 数与扫描结果不求一致"
     for sid, kind in sid_types.items():
         assert kind.startswith("子代理:"), f"{sid[:8]} 类型应为 子代理:*，实际 {kind}"
     # meta 侧的 token 一点都不能进总量：总量仍是审计全集
     assert sub["auditTotalTokens"] == sum(x["tokens"]["totalTokens"] for x in sessions_all.values()), \
         "子代理段不得改变概览总 token"
+
+    # —— 别名归并（阶段 2，§5.1 / §5.2 第 3 条）——
+    # 先扫一遍会话，把 provider 名单采出来 —— `_norm_meta_model` 靠它剥 `newapi/` 前缀，
+    # `newapi/tier-power` 这类 2 段名单靠「段数≥3」剥不掉（§2.2）。
+    sessions_dir = default_sessions_dir()
+    families, pairs, mstats = scan_session_models(sessions_dir)
+    assert "newapi" in KNOWN_PROVIDERS, \
+        f"未从数据采到 provider 名单（{sorted(KNOWN_PROVIDERS)}）—— 前缀剥除会失效"
+
+    # ① 静态 fixture：归一化规则逐条验（§2.2 的 5 种输入形态）
+    for raw, want in (("newapi/tier-power", "tier-power"),
+                      ("newapi/z-ai/glm-5.3-flash", "z-ai/glm-5.3-flash"),
+                      ("zai/glm-5.3-flash", "z-ai/glm-5.3-flash"),
+                      ("zai-org/glm-5.3-flash", "z-ai/glm-5.3-flash"),
+                      ("newapi/deepseek/deepseek-v4.1-flash", "deepseek/deepseek-v4.1-flash")):
+        got = _norm_meta_model(raw)
+        assert got == want, f"_norm_meta_model({raw!r}) = {got!r}，期望 {want!r}"
+
+    # ② 别名归并守恒 + 行数变少（§5.2 第 3 条）——归并前后总量逐字节相等
+    before_rows = merged_rows = None
+    if families:
+        _, _, bymodel_all = aggregate(all_events)
+        before_rows = len(bymodel_all)
+        merged_rows = merge_model_buckets(bymodel_all, families)
+        sum_before = sum(sum(b[k] for k in USAGE_KEYS) for b in bymodel_all.values())
+        sum_after = sum(sum(b[k] for k in USAGE_KEYS) for b in merged_rows.values())
+        assert sum_before == sum_after, \
+            f"别名归并改变了总量：{sum_before} != {sum_after}（归并只能改分组，不能改总量）"
+        assert len(merged_rows) <= before_rows, \
+            f"归并后的行数不应变多：{before_rows} -> {len(merged_rows)}"
+        # 未命中映射的名字必须单独成行，不许被归进「(未知模型)」
+        assert "(未知模型)" not in merged_rows, "未命中映射的模型被归入「(未知模型)」了（§2.1 第 4 条）"
+        # 上面那条依赖真实数据（本机日志可能全都命中映射），故另造一台合成用例
+        # **直接验归并函数本身** —— 负向验证过：把 merge 的默认值换成「(未知模型)」这条就会红。
+        probe = {"tier-std": dict.fromkeys(USAGE_KEYS, 1),
+                 "某/未声明的模型": dict.fromkeys(USAGE_KEYS, 2)}
+        probe_out = merge_model_buckets(probe, {"tier-std": "tier-std"})
+        assert "某/未声明的模型" in probe_out, \
+            f"未命中映射的名字被吞掉了（§2.1 第 4 条）：{sorted(probe_out)}"
+        assert "(未知模型)" not in probe_out, "未命中映射的模型被归入「(未知模型)」了（§2.1 第 4 条）"
+        # 守恒也要能在合成用例上成立（不依赖日志内容）
+        assert sum(sum(b.values()) for b in probe_out.values()) == sum(sum(b.values()) for b in probe.values()), \
+            "合成用例下归并改变了总量"
+        # meta.model 剥前缀后必须能在归并映射里命中，不许有 `newapi/` 残留
+        for r in runs.values():
+            if isinstance(r.get("model"), str) and r["model"]:
+                nm = _norm_meta_model(r["model"]) or ""
+                assert "newapi/" not in nm, f"meta.model 残留 provider 前缀：{r['model']}"
+
+    # ③ 子代理归因（§5.3 第 5 条）：hit + unattributed == total 必须成立，且两次跑结果一致
+    assert sub["attribution"]["hit"] + sub["attribution"]["unattributed"] == sub["attribution"]["total"], \
+        f"归因覆盖数字不自洽：{sub['attribution']}"
+    for r in runs.values():
+        if r.get("agent") is not None:
+            assert isinstance(r["agent"], str) and r["agent"], f"meta.agent 应为非空角色名，实际 {r['agent']!r}"
+    runs2, _, _ = scan_subagents(sessions_dir, sessions_all)
+    attr2 = attribute_subagents(runs2, sessions_dir)
+    assert attr2["hit"] == sub["attribution"]["hit"], \
+        f"两次归因的命中数不一致：{attr2['hit']} vs {sub['attribution']['hit']}（应为确定性运算）"
+    # 子代理 token 不进总量（§5.2 第 4 条）
+    assert sub["auditTotalTokens"] == sum(x["tokens"]["totalTokens"] for x in sessions_all.values()), \
+        "加了归因字段后概览 totalTokens 被改变了"
+
     print(f"PASS: 对账基线全部一致 {json.dumps(baseline, ensure_ascii=False)}；"
           f"子代理 {sub['totals']['runs']} 个 run（其中 {sub['usageMatchedRuns']} 个靠指纹配对），"
           f"审计侧占比 {sub['auditedShare']}，"
-          f"仅 meta 未入审计 {sub['metaOnlyTotal']:,} token（未计入总量）")
+          f"仅 meta 未入审计 {sub['metaOnlyTotal']:,} token（未计入总量）；"
+          f"别名归并 {before_rows if families else '-'} -> {merged_rows and len(merged_rows) or '-'} 行、总量守恒；"
+          f"子代理归因 {sub['attribution']['hit']}/{sub['attribution']['total']}")
     return 0
 
 
@@ -1614,11 +2104,34 @@ def main(argv=None) -> int:
 
     # 子代理产物：与审计日志完全独立的另一路扫描（--no-subagents 关掉）
     sessions_dir = Path(args.sessions_dir) if args.sessions_dir else default_sessions_dir()
+    # provider 名单必须先采 —— `_norm_meta_model` 靠它剥 `newapi/` 前缀（§2.2），
+    # 而下面的 `scan_subagents`（指纹配对）与表归并都要用它。
+    families, pairs, sess_stats = scan_session_models(sessions_dir)
+    manual = None
+    if args.model_map:
+        try:
+            doc = json.loads(Path(args.model_map).read_text(encoding="utf-8"))
+            if not isinstance(doc, dict):
+                raise ValueError("顶层必须是对象")
+            manual = doc
+        except (OSError, ValueError) as exc:
+            print(f"[提示] 读不了 --model-map {args.model_map}：{exc} —— 已回退到自动推导", file=sys.stderr)
+    # `--model-map` 给定时**完全替代**自动推导（§2.1 第 3 条）；它只声明别名→真实名，
+    # 族映射由 pairs 里未受它影响的名字补全。
+    model_map, modelmap_info = build_model_map(pairs, manual)
+    if manual is not None:
+        families = families_from_map(model_map, families)
+    modelmap_info["sessionFiles"] = sess_stats["files"]
+    modelmap_info["sessionMessages"] = sess_stats["assistantMsgs"]
+    modelmap_info["withResponseModel"] = sess_stats["withResponseModel"]
+    modelmap_info["providers"] = sess_stats["providers"]
+
     subagents, sid_types = None, {}
     if not args.no_subagents:
         # 指纹兜底配对依赖审计侧 usage 才能去重，所以扫描也用全量会话（否则过滤后配不上，同一 run 会算两次）
         runs, sub_stats, ok = scan_subagents(sessions_dir, all_sessions)
-        subagents, sid_types = build_subagents(all_sessions, runs, True, sessions_dir)
+        attr_stats = attribute_subagents(runs, sessions_dir)   # 挂父会话/轮次（§2.4）
+        subagents, sid_types = build_subagents(all_sessions, runs, True, sessions_dir, attr_stats)
         subagents["stats"] = sub_stats
         if not ok:
             print(f"[提示] 子代理产物目录不存在：{sessions_dir}（子代理段跳过）", file=sys.stderr)
@@ -1629,7 +2142,8 @@ def main(argv=None) -> int:
         args._preview_events = [e for e in events
                                 if e.get("argsPreview") is not None or e.get("promptPreview") is not None]
 
-    R = build_data(args, entries, sessions, daily, bymodel, stats, events, subagents, sid_types)
+    R = build_data(args, entries, sessions, daily, bymodel, stats, events, subagents, sid_types,
+                   families, modelmap_info)
 
     if args.json:
         text = json.dumps(to_json_data(R), ensure_ascii=False, indent=2) + "\n"

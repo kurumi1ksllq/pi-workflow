@@ -1,5 +1,28 @@
 # 变更记录
 
+## v1.14.0
+- **新增 `/audit` 斜杠命令：在 pi 里敲一下，报表直接落盘成 Markdown。** 以前要自己记
+  `python scripts/pi_audit_report.py --all-days --out ...` 这串，还要先 `cd` 到包目录。现在任意项目目录下
+  `/audit` 即可，产物写 `~/.pi/agent/audit/reports/pi-audit-<日期>-<参数指纹>.md`。
+  常用变体：`/audit --since 2026-09-20`、`/audit --label 张三`（给日志起人名，进「按人」表）。
+- ⚠️ **产物落在用户目录，不落包内** —— 包内 clone 会被 `pi update` 重建，写那里的文件留不住。
+- ⚠️ **文件名带参数指纹**（如 `-all`、`-3edf7e`）：同一组参数重跑覆盖同一份（幂等），
+  不同参数各留一份。早期只按日期命名，`/audit --label 张三` 会**覆盖掉** `/audit` 的全量报表 —— 实测踩过。
+- 命令用 `packageRoot` 定位脚本，不依赖 cwd；python 按 `python`/`python3`/`py` 顺序探测，
+  都没有就明确报错（不静默出空报表）。脚本「没数据」时正常退出不写文件，命令会把脚本自己的提示透出来，
+  不再误报成「故障」。
+- **「按模型」表做别名归并**：同一档位在数据里有多个名字（运行时别名 `tier-std`、子代理 meta 的
+  `newapi/tier-power`、上游真名 `deepseek/deepseek-v4.1-flash`），不归并则「按模型」表虚拆成 4 行以上，
+  看不出钱花在哪。映射**从数据推导**（同一条 assistant 消息的 `model` + `responseModel`），不硬编码；
+  `--model-map FILE` 可手工指定。守恒是硬约束：归并**只改分组不改总量**，`--self-test` 已固化断言。
+  归一化细节见 `docs/audit-report.md` §2.1（含两条实测踩过的坑：剥前缀判据是「第一段是已知 provider 名」
+  而非「段数 ≥ 3」；拼法统一必须在剥前缀之前）。
+- **子代理段补归因覆盖率**：不再只报「归不到」的个数，而是给出覆盖率与未归因 run 清单。
+- 新增 `scripts/test-audit-command.mjs`（21 条断言，离线、8 秒）+ `scripts/test-model-alias.py`。
+  测试**隔离家目录**写产物（早期版本会把用户自己的报表覆盖成残缺版 —— 实测踩过），
+  数据源用 `PI_AUDIT_DIR` / `PI_CODING_AGENT_DIR` 指回真实位置（只改 HOME 会让子代理段塌掉、
+  报表从 6xx 行缩到 1xx 行，测试就成了验残缺报表）。
+
 ## v1.13.5
 - **子代理段两条新纪律：review 只跑一次 + 派 reviewer 必须给边界。** 依据是本机 42 次
   `reviewer` 运行记录的实测：单次中位 73 秒，超 15 分钟的 10 次，3 次跑满 30 分钟被超时砍掉，

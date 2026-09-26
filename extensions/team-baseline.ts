@@ -22,6 +22,7 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -1187,6 +1188,98 @@ ${rules.trim()}
 		if (problems.length > 0) {
 			ctx.ui.notify(`团队基线自检未通过：${problems.join("；")}`, "info");
 		}
+	});
+
+	// ───────────────────── /audit —— 生成审计报表并落盘 Markdown ─────────────────────
+	// 报表脚本随包分发（`scripts/pi_audit_report.py` 就在 clone 里），用 packageRoot 定位，
+	// 不依赖 cwd，所以在任何项目目录下都能跑。
+	//
+	// 产物落**用户目录**而不是包内：包内 clone 会被 `pi update` 重建，写那里的文件留不住。
+	pi.registerCommand("audit", {
+		description: "生成 pi 审计报表（token 口径），落盘 Markdown；用法 /audit [--all-days|--since 日期] [--label 名字]",
+		handler: async (args, ctx) => {
+			const script = path.join(packageRoot, "scripts", "pi_audit_report.py");
+			if (!fs.existsSync(script)) {
+				ctx.ui.notify(`找不到报表脚本：${script}`, "error");
+				return;
+			}
+
+			// 各人机器上 python 命令名不同（Windows 常是 python，*nix 常是 python3）。
+			// 按序探测，命中即用；都不在就明确报出来，别让它变成「报表是空的」。
+			const py = ["python", "python3", "py"].find((c) => {
+				try {
+					execFileSync(c, ["--version"], { stdio: ["ignore", "ignore", "ignore"], timeout: 3000 });
+					return true;
+				} catch {
+					return false;
+				}
+			});
+			if (!py) {
+				ctx.ui.notify("找不到 python（试过 python / python3 / py）——审计报表需要本机有 Python 3", "error");
+				return;
+			}
+
+			// 参数原样透传给脚本（它自己解析 --all-days / --since / --until / --label …）。
+			// 默认行为是「只算今天」，所以留空时补 --all-days，避免成员以为「报表是空的」。
+			const extra = args.trim() ? args.trim().split(/\s+/) : ["--all-days"];
+
+			const outDir = path.join(os.homedir(), ".pi", "agent", "audit", "reports");
+			try {
+				fs.mkdirSync(outDir, { recursive: true });
+			} catch {
+				// 建不了就走下面的报错路径
+			}
+			// 文件名带参数指纹：同参数重跑覆盖（幂等），不同参数各留一份。
+			// ⚠ 只按日期命名会让 `/audit --label 张三` 覆盖掉 `/audit` 的全量报表 —— 踩过。
+			const stamp = new Date().toISOString().slice(0, 10);
+			const tag = args.trim()
+				? createHash("sha1").update(extra.join(" ")).digest("hex").slice(0, 6)
+				: "all";
+			const outFile = path.join(outDir, `pi-audit-${stamp}-${tag}.md`);
+
+			ctx.ui.notify(`正在生成审计报表（约 10 秒）…`, "info");
+			let scriptOut = "";
+			try {
+				scriptOut = execFileSync(py, [script, ...extra, "--out", outFile], {
+					cwd: packageRoot,
+					encoding: "utf-8",
+					timeout: 120000,
+					stdio: ["ignore", "pipe", "pipe"],
+				});
+			} catch (err) {
+				const e = err as { stderr?: string; stdout?: string; message?: string };
+				const detail = (e.stderr || e.stdout || e.message || "未知错误").trim();
+				ctx.ui.notify(`报表生成失败：${detail.slice(0, 400)}`, "error");
+				return;
+			}
+
+			// 脚本「没数据」时正常退出且不写文件 —— 这不是故障，
+			// 要把它自己的提示透出来（否则用户只看到「没写出文件」，无从下手）。
+			if (!fs.existsSync(outFile)) {
+				const hint = (scriptOut || "").trim().split("\n").filter(Boolean).slice(-3).join("\n");
+				ctx.ui.notify(
+					`没有生成报表${hint ? `：\n${hint}` : "（脚本没有写出文件）"}`,
+					"info",
+				);
+				return;
+			}
+			const lines = fs.readFileSync(outFile, "utf-8").split("\n").length;
+			ctx.ui.notify(
+				[
+					`报表已生成：${outFile}（${lines} 行）`,
+					`脚本：${script}`,
+					"",
+					"参数用法：",
+					"  /audit                  → 全部历史（默认补 --all-days）",
+					"  /audit --since 2026-09-20",
+					"  /audit --since 2026-09-20 --until 2026-09-25",
+					"  /audit --label 三姐     → 给这份日志起人名，用于按人分组",
+					"",
+					"多机汇总：把各人的 ~/.pi/agent/audit/logs/ 拷到一处，再按上面方式分别 /audit --label 名字。",
+				].join("\n"),
+				"info",
+			);
+		},
 	});
 
 	pi.registerCommand("team-baseline", {

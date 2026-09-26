@@ -9,7 +9,7 @@
 2. 全局装基线：
 
    ```bash
-   pi install git:github.com/kurumi1ksllq/pi-workflow@v1.13.5
+   pi install git:github.com/kurumi1ksllq/pi-workflow@v1.14.0
    ```
 
    **注意没有 `-l`** —— 这是全局安装，落到 `~/.pi/agent/settings.json`，
@@ -27,7 +27,7 @@
 **推荐写法，`git:` 前缀不能省：**
 
 ```
-git:github.com/<org>/pi-workflow@v1.13.5
+git:github.com/<org>/pi-workflow@v1.14.0
 ```
 
 省掉前缀 pi 会当本地目录，报 `Path does not exist: ...\github.com\org\pi-workflow` ——
@@ -136,7 +136,7 @@ node scripts/test-self-update.mjs
 一行命令，在隔离目录里模拟一个**全新成员**：
 
 ```bash
-bash scripts/simulate-member.sh v1.13.5
+bash scripts/simulate-member.sh v1.14.0
 ```
 
 它做的事：造一个独立的 agent 配置目录（不碰你本机的 `~/.pi/agent`）+
@@ -160,7 +160,7 @@ bash scripts/simulate-member.sh v1.13.5
 
 ```bash
 SB='C:\Users\<你>\pi-check-agent'   # 隔离的 agent 目录，Windows 路径写法
-PI_CODING_AGENT_DIR="$SB" pi install git:github.com/kurumi1ksllq/pi-workflow@v1.13.5
+PI_CODING_AGENT_DIR="$SB" pi install git:github.com/kurumi1ksllq/pi-workflow@v1.14.0
 # 隔离目录不带凭据，启动前把 auth.json 拷进去（models.json 别拷：那正是要验的同步目标）
 PI_CODING_AGENT_DIR="$SB" pi -p ok    # 第一次：扩展写清单 + 补 rtk + 补共享设置 + 补模型配置
 PI_CODING_AGENT_DIR="$SB" pi list     # 应看到清单里的包都带路径
@@ -235,7 +235,7 @@ PI_CODING_AGENT_DIR="$SB" pi list     # 应看到清单里的包都带路径
 | `team/` | 扩展的数据源：`RULES.md`（规范）+ `mcp.template.json`（MCP 基线）+ `packages.json`（第三方包清单）+ `agent-settings.json`（共享设置补丁）+ `models.template.json`（网关与档位别名，不含 key）+ `extensions/`（各扩展的默认配置） |
 | `tools/` | `rtk.exe`，`pi-rtk-optimizer` 需要的二进制，随包分发 |
 | `templates/` | 项目级配置模板 `project-settings.json`、项目侧哨兵 `project-AGENTS.md` |
-| `scripts/` | `release.sh`（发版）、`simulate-member.sh`（从零装验证）、`test-extension.mjs`（基线扩展离线测）、`test-self-update.mjs`（自动更新链路离线测）、`test-audit-extension.mjs`（审计扩展离线测）、`pi_audit_report.py`（审计报表） |
+| `scripts/` | `release.sh`（发版）、`simulate-member.sh`（从零装验证）、`test-extension.mjs`（基线扩展离线测）、`test-self-update.mjs`（自动更新链路离线测）、`test-audit-extension.mjs`（审计扩展离线测）、`test-audit-command.mjs`（`/audit` 命令离线测）、`test-model-alias.py`（别名归并测）、`pi_audit_report.py`（审计报表，被 `/audit` 调用） |
 | `docs/` | 怎么写各类资源 + `audit-log.md`（审计字段与口径）、`audit-report.md`（报表用法）。**说明文档一律放这里，别放 skills/** |
 | `ONBOARDING.md` | 给成员的上手指南，**可直接转发** |
 | `CHANGELOG.md` | 变更记录 |
@@ -271,7 +271,7 @@ PI_CODING_AGENT_DIR="$SB" pi list     # 应看到清单里的包都带路径
 | 产物 | 路径 |
 | --- | --- |
 | 流水 | `~/.pi/agent/audit/logs/<日期>.jsonl`（一事件一行，追加写，进程被杀也留痕） |
-| 报表 | `python scripts/pi_audit_report.py` → Markdown（按天/按模型/按人 token 分布、工具与失败率、skill 命中、收敛率、上下文压力） |
+| 报表 | 在 pi 里敲 `/audit` → Markdown 落盘 `~/.pi/agent/audit/reports/`（按天/按模型/按人 token 分布、工具与失败率、skill 命中、收敛率、上下文压力）。也可直接 `python scripts/pi_audit_report.py --all-days` |
 | 配置 | `~/.pi/agent/extensions/audit-log/config.json`（首次启动从包里补一份默认的；调过之后团队更新不再动） |
 
 不想要就关掉，立刻一条都不写，不用卸包：
@@ -279,6 +279,31 @@ PI_CODING_AGENT_DIR="$SB" pi list     # 应看到清单里的包都带路径
 ```bash
 echo '{"enabled": false}' > ~/.pi/agent/extensions/audit-log/config.json
 ```
+
+### 看报表：在 pi 里敲 `/audit`
+
+不用记 python 命令、也不用 `cd` 到包目录 —— 任意项目目录下都能跑：
+
+```
+/audit                                  → 全部历史
+/audit --since 2026-09-20               → 从某天起
+/audit --since 2026-09-20 --until 2026-09-25
+/audit --label 张三                     → 给这份日志起人名，进「按人」表
+```
+
+产物落 `~/.pi/agent/audit/reports/pi-audit-<日期>-<参数指纹>.md`（**不落包内** ——
+包内 clone 会被 `pi update` 重建，写那里的文件留不住）。文件名带参数指纹：同参数重跑覆盖同一份，
+不同参数各留一份，不会互相覆盖。参数原样透传给脚本，`--json` / `--session` 那些也能用。
+
+**看清谁在烧 token（多人汇总）**：把各人机器上的 `~/.pi/agent/audit/logs/` 拷到一处，然后
+
+```bash
+python scripts/pi_audit_report.py --dir <甲的logs> --label 甲 --dir <乙的logs> --label 乙 --all-days --out 团队.md
+```
+
+⚠️ `--label` 必须**紧跟**在它对应的 `--dir` 后面。单机跑出来的「按人」表只有一行，那是正常的 —— 不是团队视角。
+「按模型」表已做别名归并（`tier-std` / `newapi/tier-power` / `deepseek/deepseek-v4.1-flash` 合成一行），
+所以直接看那一张表就知道钱花在哪个档位；口径见 `docs/audit-report.md` §2.1。
 
 口径与缺口见 `docs/audit-log.md`，报表用法见 `docs/audit-report.md`。
 两条注意：按天的文件里**混着当天所有会话**，统计前先按 `sessionId` 过滤；
