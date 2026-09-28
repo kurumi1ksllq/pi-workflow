@@ -105,6 +105,12 @@ check(
 	injected?.systemPrompt?.includes("别把 `reviewer` 当循环用"),
 	"注入段缺了「review 只跑一次」这条纪律",
 );
+// 时机这条同样只能靠明文拦：退回「每次实现完成后」= 多步任务被切成好几轮审查，中途反复等模型生成。
+// 原判据「只跑一次」抓不住这个回归（措辞变了但都含「只跑一次」），所以要独立断言时机的措辞。
+check(
+	injected?.systemPrompt?.includes("也别当每步的检查点用"),
+	"注入段缺了「reviewer 只在收尾时跑」这条纪律（别退回「每次实现完成后」）",
+);
 check(
 	injected?.systemPrompt?.includes("全程耗在模型生成上"),
 	"注入段缺了「派 reviewer 必须给边界」这条纪律",
