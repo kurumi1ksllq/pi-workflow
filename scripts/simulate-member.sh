@@ -191,6 +191,21 @@ else
 fi
 
 echo
+echo "--- /handoff 命令能不能用（成员拿到的那份，不是工作副本）---"
+PROBE_HO="$(dirname "$0")/probe-handoff-command.mjs"
+if [ -f "$PROBE_HO" ]; then
+	node "$PROBE_HO" "$CLONE_EARLY"
+	probe_ho_rc=$?
+	if [ "$probe_ho_rc" -ne 0 ]; then
+		echo "  ⚠ /handoff 命令验证未通过（exit=$probe_ho_rc）—— 成员敲这个命令会失败"
+	fi
+else
+	echo "  （没找到 $PROBE_HO，跳过）"
+fi
+# 探针会在 clone 里写 docs/.handoff-material.md，清掉别干扰后面的自动更新（有改动就不动手）
+rm -f "$CLONE_EARLY/docs/.handoff-material.md" 2>/dev/null; rmdir "$CLONE_EARLY/docs" 2>/dev/null || true
+
+echo
 echo "=== 7/7 自动更新（跟远端最新 tag）==="
 CLONE="$SB/agent/git/github.com/kurumi1ksllq/pi-workflow"
 STATE="$SB/agent/extensions/team-baseline/update-state.json"

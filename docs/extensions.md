@@ -8,9 +8,9 @@
 只有 pi 原生做不到的东西才写扩展（注入上下文、新工具、斜杠命令、快捷键、TUI 组件）。
 能用 skill 表达的就写 skill —— 可读、可 review、可回滚。
 
-## 当前内容：team-baseline.ts
+## 当前内容：team-baseline.ts / audit-log.ts / context-thrift.ts / handoff.ts
 
-这个扩展是为了补 pi 的七个边界，不是随手加的：
+四个扩展各治一类问题。`team-baseline.ts` 补 pi 的八个边界，不是随手加的：
 
 | 边界 | pi 原生行为 | 这个扩展做什么 |
 | --- | --- | --- |
@@ -47,6 +47,19 @@ AGENTS.override.md / AGENTS.md / AGENTS.MD / CLAUDE.md / CLAUDE.MD
 - 没有 pi 层面的校验，**扩展不跑 = 规范静默失效**
 - 想用 pi 原生认可的形态，就得叫 `AGENTS.md` 并放在**各项目仓库根**（包里那个不算）
   —— 代价是每个项目一份，会漂移
+
+## 会话交接扩展（handoff.ts）的要点
+
+`handoff.ts` 注册 `/handoff` 命令 + 一个 `before_agent_start` 阈值提醒。几条要记住的：
+
+- **扩展只抽素材、不写交接文档**。写档由新会话的**模型**做 —— 它读旧档 + 素材、理解现状、整理续写。
+  这是刻意的分工：扩展做机械抽取，判断和写作交给模型（脚本式整篇覆盖就失去意义了）。
+- **落点默认 `docs/.handoff.md`（点文件）**，避开项目里人写的 `docs/HANDOFF.md`。改落点用 `HANDOFF_FILE`。
+- **只有命令 ctx 有 `newSession`**（实测：工具 ctx 的 `newSession` 是 `undefined`）→ 模型无法自触发，
+  必须人敲命令。这是 pi 故意的，别想着「让 agent 自己切」。
+- **进包后必须删本机同名副本**（`<agent dir>/extensions/handoff.ts`）—— pi 按路径加载、不按名去重，
+  两份同时跑 = 命令注册两次。这条对所有进包的扩展都成立。
+- 离线测 `scripts/test-handoff-command.mjs`；全链路探针 `scripts/probe-handoff-command.mjs`（在 `simulate-member.sh` 里）。
 
 ## 自己验证注入（不用信别人说的）
 

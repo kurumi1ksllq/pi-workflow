@@ -9,7 +9,7 @@
 2. 全局装基线：
 
    ```bash
-   pi install git:github.com/kurumi1ksllq/pi-workflow@v1.14.2
+   pi install git:github.com/kurumi1ksllq/pi-workflow@v1.15.0
    ```
 
    **注意没有 `-l`** —— 这是全局安装，落到 `~/.pi/agent/settings.json`，
@@ -27,7 +27,7 @@
 **推荐写法，`git:` 前缀不能省：**
 
 ```
-git:github.com/<org>/pi-workflow@v1.14.2
+git:github.com/<org>/pi-workflow@v1.15.0
 ```
 
 省掉前缀 pi 会当本地目录，报 `Path does not exist: ...\github.com\org\pi-workflow` ——
@@ -136,7 +136,7 @@ node scripts/test-self-update.mjs
 一行命令，在隔离目录里模拟一个**全新成员**：
 
 ```bash
-bash scripts/simulate-member.sh v1.14.2
+bash scripts/simulate-member.sh v1.15.0
 ```
 
 它做的事：造一个独立的 agent 配置目录（不碰你本机的 `~/.pi/agent`）+
@@ -160,7 +160,7 @@ bash scripts/simulate-member.sh v1.14.2
 
 ```bash
 SB='C:\Users\<你>\pi-check-agent'   # 隔离的 agent 目录，Windows 路径写法
-PI_CODING_AGENT_DIR="$SB" pi install git:github.com/kurumi1ksllq/pi-workflow@v1.14.2
+PI_CODING_AGENT_DIR="$SB" pi install git:github.com/kurumi1ksllq/pi-workflow@v1.15.0
 # 隔离目录不带凭据，启动前把 auth.json 拷进去（models.json 别拷：那正是要验的同步目标）
 PI_CODING_AGENT_DIR="$SB" pi -p ok    # 第一次：扩展写清单 + 补 rtk + 补共享设置 + 补模型配置
 PI_CODING_AGENT_DIR="$SB" pi list     # 应看到清单里的包都带路径
@@ -231,11 +231,11 @@ PI_CODING_AGENT_DIR="$SB" pi list     # 应看到清单里的包都带路径
 | --- | --- |
 | `skills/` | 按需加载的能力包。`00-core/` 全员共享，其余按角色分目录 |
 | `prompts/` | 斜杠命令，`review.md` → `/review` |
-| `extensions/` | `team-baseline.ts`（引导扩展：注入规范、补 MCP 基线、同步包清单、补共享设置、补模型配置、补扩展配置、补 rtk、自动跟最新 tag）+ `audit-log.ts`（审计日志，见下节）+ `context-thrift.ts`（剥离重放的历史思考，见下节） |
+| `extensions/` | `team-baseline.ts`（引导扩展：注入规范、补 MCP 基线、同步包清单、补共享设置、补模型配置、补扩展配置、补 rtk、自动跟最新 tag）+ `audit-log.ts`（审计日志，见下节）+ `context-thrift.ts`（剥离重放的历史思考，见下节）+ `handoff.ts`（会话交接 `/handoff`，见下节） |
 | `team/` | 扩展的数据源：`RULES.md`（规范）+ `mcp.template.json`（MCP 基线）+ `packages.json`（第三方包清单）+ `agent-settings.json`（共享设置补丁）+ `models.template.json`（网关与档位别名，不含 key）+ `extensions/`（各扩展的默认配置） |
 | `tools/` | `rtk.exe`，`pi-rtk-optimizer` 需要的二进制，随包分发 |
 | `templates/` | 项目级配置模板 `project-settings.json`、项目侧哨兵 `project-AGENTS.md` |
-| `scripts/` | `release.sh`（发版）、`simulate-member.sh`（从零装验证）、`test-extension.mjs`（基线扩展离线测）、`test-self-update.mjs`（自动更新链路离线测）、`test-audit-extension.mjs`（审计扩展离线测）、`test-audit-command.mjs`（`/audit` 命令离线测）、`test-model-alias.py`（别名归并测）、`pi_audit_report.py`（审计报表，被 `/audit` 调用） |
+| `scripts/` | `release.sh`（发版）、`simulate-member.sh`（从零装验证）、`test-extension.mjs`（基线扩展离线测）、`test-self-update.mjs`（自动更新链路离线测）、`test-audit-extension.mjs`（审计扩展离线测）、`test-audit-command.mjs`（`/audit` 命令离线测）、`test-handoff-command.mjs`（`/handoff` 命令离线测）、`test-model-alias.py`（别名归并测）、`pi_audit_report.py`（审计报表，被 `/audit` 调用） |
 | `docs/` | 怎么写各类资源 + `audit-log.md`（审计字段与口径）、`audit-report.md`（报表用法）。**说明文档一律放这里，别放 skills/** |
 | `ONBOARDING.md` | 给成员的上手指南，**可直接转发** |
 | `CHANGELOG.md` | 变更记录 |
@@ -308,6 +308,32 @@ python scripts/pi_audit_report.py --dir <甲的logs> --label 甲 --dir <乙的lo
 口径与缺口见 `docs/audit-log.md`，报表用法见 `docs/audit-report.md`。
 两条注意：按天的文件里**混着当天所有会话**，统计前先按 `sessionId` 过滤；
 审计日志是**索引 + 指标**，需要工具输出原文时用 `toolCallId` 回联 session jsonl。
+
+## 会话交接（`handoff`）：把长会话切开，状态留在文件里
+
+长会话越跑越贵、上下文越滚越大。`/handoff` 把当前会话的机械记录抽成一份**素材**，
+再开一个新会话，让新会话的模型**读懂旧文档 + 素材**、在**保留旧内容的前提下整理续写**交接文档，
+然后接着干。**判断与写作交给模型**（它理解现状再动手），扩展只做机械的抽取和开新会话。
+
+```
+/handoff 接着补单元测试              → 抽素材 + 切新会话；新会话整理续写文档并接着干
+/handoff --doc-only 只整理           → 同上，但新会话只整理文档、不开发
+/handoff                            → 下一步留空，它整理完停下问你
+```
+
+- **落点**：项目根 `docs/.handoff.md`（点文件）。为什么不是 `docs/HANDOFF.md` ——
+  很多项目已经有人手写的同名文档（历史记录/接手说明），自动交接写同名文件会去「续写」一份本该由人维护的文档。
+  要改落点设环境变量 `HANDOFF_FILE`（相对项目根）。
+- **素材**：写在落点同目录的 `.handoff-material.md`，含最近需求 / 改动文件 / 最后状态 / git / 本次「下一步」。
+  新会话整理完可以删掉它。
+- **阈值提醒**：每轮开始时若上下文占用越过 70/80/90% 的新档位，注入一条提醒（**每档只提一次**，不刷屏）。
+  阈值用 `HANDOFF_THRESHOLD` 改（默认 70）；设 `>100` 关掉提醒（命令仍可用）。
+- **为什么必须人工敲**：只有斜杠命令的 ctx 有 `newSession`，**工具 ctx 没有** → 模型无法自己开新会话
+  （pi 故意的：模型不能自行清空上下文）。所以「无人值守全自动切」在扩展层做不到。
+- **边界**：只落本机文件、绝不联网。完全停用：包内删掉 `extensions/handoff.ts`（发版后成员自动跟上）。
+
+离线测：`node scripts/test-handoff-command.mjs`（28 项断言，秒级，不碰用户目录）。
+全链路探针 `scripts/probe-handoff-command.mjs` 在 `simulate-member.sh` 里跑，验**成员拿到的那份**。
 
 ## 上下文瘦身（`context-thrift`）
 
