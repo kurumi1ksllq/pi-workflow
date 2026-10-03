@@ -34,7 +34,7 @@ fs.writeFileSync(p, JSON.stringify(d, null, 2) + '\n');
 console.log('package.json version -> ' + d.version);
 const v = '${V#v}';
 // 文档里的安装命令统一改写，避免「文档写着旧版本」这种漂移
-for (const f of ['README.md', 'ONBOARDING.md']) {
+for (const f of ['README.md', 'ONBOARDING.md', 'ANNOUNCEMENT.md']) {
   if (!fs.existsSync(f)) continue;
   const before = fs.readFileSync(f, 'utf8');
   const after = before

@@ -1,5 +1,12 @@
 # 变更记录
 
+## v1.15.2
+- **新增 `ANNOUNCEMENT.md`：一份可直接转发给成员的公告**，讲清一键安装（全局、不带 `-l`）、
+  首次装要启动两次、以及 `/audit` 与 `/handoff` 两个命令的用法与用处。团队分发基线时
+  不用再各写一遍说明。
+- **发版脚本的版本号改写范围纳入 `ANNOUNCEMENT.md`** —— 公告里的 `pi-workflow@vX.Y.Z`
+  以后随 `release.sh` 自动对齐，避免文档写着旧版本的漂移（此前只覆盖 README/ONBOARDING）。
+
 ## v1.15.1
 - **升级三个扩展包，消除 pi 启动时的 typebox 重复副本警告。** `@juicesharp/rpiv-ask-user-question`
   2.10.1→2.12.0、`@juicesharp/rpiv-todo` 2.10.1→2.12.0、`pi-subagents` 0.71.0→0.75.0。
