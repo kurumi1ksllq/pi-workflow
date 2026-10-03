@@ -1,5 +1,15 @@
 # 变更记录
 
+## v1.15.1
+- **升级三个扩展包，消除 pi 启动时的 typebox 重复副本警告。** `@juicesharp/rpiv-ask-user-question`
+  2.10.1→2.12.0、`@juicesharp/rpiv-todo` 2.10.1→2.12.0、`pi-subagents` 0.71.0→0.75.0。
+  这三个旧版的 `package.json` 把宿主自带的 `typebox` 写进了 `dependencies`，npm 会给每个包再装一份副本
+  （实测 `~/.pi/agent/npm/node_modules/typebox@1.3.34`），pi 加载器随即打
+  「Host-provided extension packages must be declared in peerDependencies with a "*" range」警告。
+  新版上游已把 `typebox` 挪到 `peerDependencies` 并标 `"*"`，升级后副本被清掉、警告消失。
+  危害不是致命错误而是隐患：两份 `typebox` 跨模块边界时 `instanceof`/类型校验可能对不上。
+  本机三次启动验证无警告，离线测试全绿。
+
 ## v1.15.0
 - **新增 `/handoff`：把长会话切开，状态留在文件里。** 长会话越跑越贵、上下文越滚越大
   （实测整机 7 个长会话吃掉 86% 的轮次）。`/handoff [下一步]` 把当前会话的机械记录抽成一份**素材**，
