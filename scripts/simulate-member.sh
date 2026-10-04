@@ -6,16 +6,14 @@
 #
 # 做法：
 #   1. 造一个隔离的 agent 配置目录（PI_CODING_AGENT_DIR），完全不碰本机 ~/.pi/agent
-#   2. 从 PATH 里摘掉 rtk（模拟从没装过 rtk 的机器）
-#   3. install → 第一次启动（扩展写清单/共享设置/扩展配置 + 补 rtk）→ 第二次启动（清单里的包才装上）→ pi list
-#   4. 把各条链路的证据打出来，肉眼判断
+#   2. install → 第一次启动（扩展写清单/共享设置/扩展配置）→ 第二次启动（清单里的包才装上）→ pi list
+#   3. 把各条链路的证据打出来，肉眼判断
 #
 # 判据：
 #   - `pi list` 的 User packages 每一项都**带安装路径**（只看到包名 = 还没装上，缺了第二次启动）
 #   - 隔离目录的 npm/node_modules 里确实有清单里的包
-#   - rtk 落在一个 PATH 能找到的目录里
 #   - 隔离目录 settings.json 里出现 subagents / compaction（共享设置同步）
-#   - 隔离目录 extensions/pi-rtk-optimizer/config.json 存在（扩展配置同步）
+#   - 隔离目录 context-prune/settings.json 存在（扩展配置同步，非默认落点的那种扩展）
 set -uo pipefail
 
 V="${1:-}"
@@ -68,38 +66,32 @@ if [ -n "$NEWAPI_KEY" ]; then
 else
   echo "⚠ 本机 models.json 里取不到明文 newapi key —— 两次启动可能因缺 key 直接退出，结果不可信"
 fi
-# 摘掉含 rtk 的目录（本机 rtk 一般在 ~/.local/bin），制造"没装过 rtk"的初始条件
-export PATH=$(echo "$PATH" | tr ':' '\n' | grep -v '\.local/bin' | paste -sd:)
-
 echo "隔离 agent 目录：$SB/agent"
 echo "安装源：$REPO_SRC"
-echo "rtk 初始可见性：$(command -v rtk || echo '（不可见 —— 符合模拟条件）')"
 echo
 
-echo "=== 1/6 install ==="
+echo "=== 1/7 install ==="
 pi install "$REPO_SRC" 2>&1 | grep -aE "Installed|error|Error|not exist" | tail -5
 
 echo
-echo "=== 2/6 第一次启动（扩展写清单 + 补共享设置/扩展配置 + 补 rtk）==="
+echo "=== 2/7 第一次启动（扩展写清单 + 补共享设置/扩展配置）==="
 (cd "$SB/proj" && pi -p "ok" 2>&1 | grep -a "team-baseline" || echo "（没有 team-baseline 输出 —— 扩展没跑起来）")
 
 echo
-echo "=== 3/6 第二次启动（清单里的包这时才装上）==="
+echo "=== 3/7 第二次启动（清单里的包这时才装上）==="
 (cd "$SB/proj" && pi -p "ok" 2>&1 | grep -a "team-baseline" || echo "（第二次启动没有 team-baseline 输出 —— 应该安静才对）")
 
 echo
-echo "=== 4/6 pi list ==="
+echo "=== 4/7 pi list ==="
 (cd "$SB/proj" && pi list 2>&1 | tail -20)
 
 echo
-echo "=== 5/6 包装到哪了（有这两个目录才算真装上）==="
+echo "=== 5/7 包装到哪了（有这两个目录才算真装上）==="
 ls -d "$SB/agent/git" "$SB/agent/npm/node_modules" 2>/dev/null | sed 's|^|  |'
 ls "$SB/agent/npm/node_modules" 2>/dev/null | sed 's|^|  ├─ |'
 
 echo
 echo "=== 6/7 各条同步链路的落点 ==="
-echo "--- rtk ---"
-command -v rtk || echo "  （找不到 rtk —— 这一步失败了）"
 echo "--- settings.json（共享设置）---"
 node -e '
 const fs = require("fs");
@@ -116,8 +108,10 @@ try {
 }
 ' "$SB/agent/settings.json"
 echo "--- 扩展自己的配置 ---"
-for name in pi-rtk-optimizer audit-log context-thrift; do
-	if [ -f "$SB/agent/extensions/$name/config.json" ]; then
+# pi-context-prune 的配置不在默认落点，而在 <agent dir>/context-prune/settings.json
+for spec in "audit-log:extensions/audit-log/config.json" "context-thrift:extensions/context-thrift/config.json" "pi-context-prune:context-prune/settings.json"; do
+	name="${spec%%:*}"; rel="${spec#*:}"
+	if [ -f "$SB/agent/$rel" ]; then
 		echo "  ✓ $name 默认配置已补"
 	else
 		echo "  （$name 没补上 —— 扩展配置同步这一步失败了）"
@@ -250,8 +244,8 @@ else
 fi
 
 echo
-echo "判据：① pi list 每项都带安装路径 ② node_modules 里有清单里的包 ③ rtk 能被找到"
-echo "      ④ settings.json 里有 subagents 和 compaction ⑤ 扩展配置已补（rtk + 审计）"
-echo "      ⑥ 模板说明键没泄漏 ⑦ 审计日志真写出来了且没有重复加载 ⑧ 自动更新跟上了新 tag（用本地假远端验）"
-echo "      ⑨ models.json 里有 newapi + 四个档位，且 apiKey 是 \$ 环境变量引用（不是明文 key）"
+echo "判据：① pi list 每项都带安装路径 ② node_modules 里有清单里的包"
+echo "      ③ settings.json 里有 subagents 和 compaction ④ 扩展配置已补（prune + 审计 + thrift）"
+echo "      ⑤ 模板说明键没泄漏 ⑥ 审计日志真写出来了且没有重复加载 ⑦ 自动更新跟上了新 tag（用本地假远端验）"
+echo "      ⑧ models.json 里有 newapi + 四个档位，且 apiKey 是 \$ 环境变量引用（不是明文 key）"
 echo "清理：rm -rf \"$SB\""

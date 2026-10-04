@@ -1,5 +1,25 @@
 # 变更记录
 
+## v1.16.0
+- **移除 `pi-rtk-optimizer`，换上 `pi-context-prune@2.1.0`。** rtk 依赖独立的 `rtk` 二进制
+  （包内 `tools/rtk.exe`，PE/Windows 专有），团队要把 pi 搬到 Linux（云端 Hermes）时直接不可用 ——
+  **非跨平台**，2026-10-04 三姐拍板移除。替代品 `pi-context-prune` 是纯 npm 包、无原生二进制，
+  做对话历史压缩（摘要已完成的 tool-call 批次，可通过 context tree 找回被剪内容），跨平台。
+  从此团队清单里不再有「依赖平台专有二进制」的包。
+- **`pi-rtk-optimizer` 在基线里绑的 5 处全部清掉**：`team/packages.json` 清单、
+  `extensions/team-baseline.ts` 的 `ensureRtk()`/`rtkOnPath()`/`RtkState` + 启动补 PATH 的调用块 +
+  `/team-baseline` diag 里的 `rtkSync` 行、`team/extensions/pi-rtk-optimizer.json` 配置模板、
+  `tools/rtk.exe`（9.2MB）、文档与测试引用（README/ONBOARDING/docs/simulate-member.sh/test-extension.mjs）。
+  `tools/` 目录保留为空目录（以后可能再放二进制），不再随包分发任何文件。
+- **`syncExtensionConfigs` 新增路径特例表 `EXT_CONFIG_TARGETS`。** 原逻辑把 `team/extensions/<名>.json`
+  一律补到 `<agent dir>/extensions/<名>/config.json`，但 `pi-context-prune` 读的是
+  `<agent dir>/context-prune/settings.json`（源码 `src/config.ts` 的 `SETTINGS_PATH`）——
+  写错位置 = **静默不生效**。新表登记覆盖路径，未登记的走原默认。以后扩展不读默认落点都往这张表里加。
+- **新增 `team/extensions/pi-context-prune.json`** 团队默认配置（`enabled:true`、`showPruneStatusLine`、
+  `pruneOn:agentic-auto`、`batchingMode:agent-message` 等 9 项），按「只补不覆盖」补到成员机器上。
+- **CHANGELOG 历史条目保留原文**，不追改（rtk 相关旧条目是当时事实的记录）。
+- 两个离线测（`test-extension.mjs` / `test-self-update.mjs`）同步改断言，全绿。
+
 ## v1.15.2
 - **新增 `ANNOUNCEMENT.md`：一份可直接转发给成员的公告**，讲清一键安装（全局、不带 `-l`）、
   首次装要启动两次、以及 `/audit` 与 `/handoff` 两个命令的用法与用处。团队分发基线时

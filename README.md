@@ -9,7 +9,7 @@
 2. 全局装基线：
 
    ```bash
-   pi install git:github.com/kurumi1ksllq/pi-workflow@v1.15.2
+   pi install git:github.com/kurumi1ksllq/pi-workflow@v1.16.0
    ```
 
    **注意没有 `-l`** —— 这是全局安装，落到 `~/.pi/agent/settings.json`，
@@ -27,7 +27,7 @@
 **推荐写法，`git:` 前缀不能省：**
 
 ```
-git:github.com/<org>/pi-workflow@v1.15.2
+git:github.com/<org>/pi-workflow@v1.16.0
 ```
 
 省掉前缀 pi 会当本地目录，报 `Path does not exist: ...\github.com\org\pi-workflow` ——
@@ -136,17 +136,16 @@ node scripts/test-self-update.mjs
 一行命令，在隔离目录里模拟一个**全新成员**：
 
 ```bash
-bash scripts/simulate-member.sh v1.15.2
+bash scripts/simulate-member.sh v1.16.0
 ```
 
-它做的事：造一个独立的 agent 配置目录（不碰你本机的 `~/.pi/agent`）+
-从 PATH 里摘掉 rtk（模拟没装过 rtk 的机器），然后走 `install` → 第一次启动 → 第二次启动 →
-`pi list`，把包装到哪、rtk 落在哪、共享设置有没有写进去都打出来。
+它做的事：造一个独立的 agent 配置目录（不碰你本机的 `~/.pi/agent`），然后走
+`install` → 第一次启动 → 第二次启动 → `pi list`，把包装到哪、共享设置有没有写进去都打出来。
 
 **判据**：`User packages` 里每一项都**带安装路径**（`pi-workflow` + 清单里的那些包）、
-隔离目录的 `npm/node_modules` 里确实有它们、rtk 能被 `command -v` 找到、
+隔离目录的 `npm/node_modules` 里确实有它们、
 隔离目录的 `settings.json` 里出现 `subagents` 与 `compaction`、
-`extensions/pi-rtk-optimizer/config.json` 存在、`models.json` 里出现 `newapi` + 四个档位
+`context-prune/settings.json` 存在（非默认落点的扩展配置同步）、`models.json` 里出现 `newapi` + 四个档位
 （且 `apiKey` 是 `$` 环境变量引用，成员自建的 provider 还在）、
 `extensions/context-thrift/config.json` 存在（含 `subagent` 的 keep 名单）、
 最后一步把 origin 换成带假 tag 的本地远端后**下次启动自动跟上了新 tag**。
@@ -160,9 +159,9 @@ bash scripts/simulate-member.sh v1.15.2
 
 ```bash
 SB='C:\Users\<你>\pi-check-agent'   # 隔离的 agent 目录，Windows 路径写法
-PI_CODING_AGENT_DIR="$SB" pi install git:github.com/kurumi1ksllq/pi-workflow@v1.15.2
+PI_CODING_AGENT_DIR="$SB" pi install git:github.com/kurumi1ksllq/pi-workflow@v1.16.0
 # 隔离目录不带凭据，启动前把 auth.json 拷进去（models.json 别拷：那正是要验的同步目标）
-PI_CODING_AGENT_DIR="$SB" pi -p ok    # 第一次：扩展写清单 + 补 rtk + 补共享设置 + 补模型配置
+PI_CODING_AGENT_DIR="$SB" pi -p ok    # 第一次：扩展写清单 + 补共享设置 + 补模型配置
 PI_CODING_AGENT_DIR="$SB" pi list     # 应看到清单里的包都带路径
 ```
 
@@ -173,15 +172,18 @@ PI_CODING_AGENT_DIR="$SB" pi list     # 应看到清单里的包都带路径
 **这个包有没有外部依赖？** `pi install` 只能装 npm 包本身，
 装不了它需要的独立二进制/系统工具。
 
-踩过的例子：`pi-rtk-optimizer` 需要单独的 `rtk` 二进制，而 **rtk 不在 pi 的包体系里**
-（官方 `@rtk-ai/rtk` 没发 npm 包；而且实测 `pi install npm:xxx` 装的包，
-它的命令行**不会**进 PATH，所以就算有 npm 包也没用）。
+踩过的例子（已弃用）：早期清单里有过 `pi-rtk-optimizer`，它需要单独的 `rtk` 二进制，
+而 **rtk 不在 pi 的包体系里**（官方 `@rtk-ai/rtk` 没发 npm 包；而且实测 `pi install npm:xxx`
+装的包，它的命令行**不会**进 PATH）。当时的解法是包里带一份 `tools/rtk.exe`、
+扩展启动时补到 npm 全局 bin。
 
-**这个坑的解法**：包里带一份 `tools/rtk.exe`，扩展启动时检测 `where rtk`，
-缺了就复制到 **npm 全局 bin 目录**（用 npm 装过 pi 的人，该目录必然在 PATH），
-复制完再用 `where` 验一次。全自动，成员无感。
+**弃用原因**：`rtk.exe` 是 Windows 专有二进制，团队要把 pi 搬到 Linux（云端 Hermes）
+时它直接不可用——**非跨平台**。2026-10-04 从清单移除，改装纯 npm 的 `pi-context-prune`
+（对话历史压缩，无原生二进制，跨平台）。**教训：给团队清单挑包时，纯 npm / 跨平台优先**，
+带平台专有二进制的一律先想清楚「换平台还能不能用」。
 
-**新增带外部依赖的包时照这个模式办**：把二进制放 `tools/`，扩展里加一段补装逻辑。
+**新增带外部依赖的包时**：如果确实无法避免，把二进制放 `tools/`，
+扩展里加一段补装逻辑（本仓已不再有这种包，`git log` 里可查到 rtk 的旧实现作参考）。
 
 **所以加包前先看一眼它的 README**，确认：
 
@@ -197,7 +199,7 @@ PI_CODING_AGENT_DIR="$SB" pi list     # 应看到清单里的包都带路径
 | **第三方 pi 包**（要团队一起装的扩展） | `team/packages.json`，**一律写死版本号**（`npm:foo@1.2.3` / `git:host/org/repo@<tag 或 commit>`） | 扩展补进**全局** `~/.pi/agent/settings.json`；旧的同名条目（不带版本）会被替换成钉版本的 |
 | **共享的全局设置**（`subagents` 模型路由、`compaction` 等） | `team/agent-settings.json` | 扩展**只补缺**地并进全局 `settings.json`：成员自己设过的键一个都不动 |
 | **团队模型配置**（网关地址 + 档位别名） | `team/models.template.json`，**`apiKey` 只能写 `$环境变量`** | 扩展按 provider 合并进全局 `models.json`：provider 缺就整段补，已在则只补缺的字段、按 id 追加缺的档位，已有的档位定义与成员自建的 provider 一律不动。**唯一例外**：档位的 `contextWindow` 正好等于某次改版前的旧模板值时会刷成现值（成员自己调过的、哪怕只差 1，都不动）—— 否则团队改模板永远推不到老成员身上 |
-| **扩展自己的配置文件**（`pi-rtk-optimizer` 这类把配置放自己目录的） | `team/extensions/<扩展名>.json` | 扩展补到 `<agent dir>/extensions/<扩展名>/config.json`，**目标存在就完全不动** |
+| **扩展自己的配置文件**（`pi-context-prune` 这类把配置放自己文件的） | `team/extensions/<扩展名>.json` | 扩展补到 `<agent dir>/extensions/<扩展名>/config.json`，**目标存在就完全不动**；扩展若不是读这个默认落点（如 `pi-context-prune` 读 `<agent dir>/context-prune/settings.json`），在 `team-baseline.ts` 的 `EXT_CONFIG_TARGETS` 里登记覆盖路径 |
 | **项目级设置**（compaction 等） | 各项目 `.pi/settings.json`，可从 `templates/project-settings.json` 抄 | 项目负责人手工放一次 |
 | 团队自己的 skill / prompt / 扩展 / 规范 | 包内对应目录 | 升级团队包 |
 
@@ -231,9 +233,9 @@ PI_CODING_AGENT_DIR="$SB" pi list     # 应看到清单里的包都带路径
 | --- | --- |
 | `skills/` | 按需加载的能力包。`00-core/` 全员共享，其余按角色分目录 |
 | `prompts/` | 斜杠命令，`review.md` → `/review` |
-| `extensions/` | `team-baseline.ts`（引导扩展：注入规范、补 MCP 基线、同步包清单、补共享设置、补模型配置、补扩展配置、补 rtk、自动跟最新 tag）+ `audit-log.ts`（审计日志，见下节）+ `context-thrift.ts`（剥离重放的历史思考，见下节）+ `handoff.ts`（会话交接 `/handoff`，见下节） |
+| `extensions/` | `team-baseline.ts`（引导扩展：注入规范、补 MCP 基线、同步包清单、补共享设置、补模型配置、补扩展配置、自动跟最新 tag）+ `audit-log.ts`（审计日志，见下节）+ `context-thrift.ts`（剥离重放的历史思考，见下节）+ `handoff.ts`（会话交接 `/handoff`，见下节） |
 | `team/` | 扩展的数据源：`RULES.md`（规范）+ `mcp.template.json`（MCP 基线）+ `packages.json`（第三方包清单）+ `agent-settings.json`（共享设置补丁）+ `models.template.json`（网关与档位别名，不含 key）+ `extensions/`（各扩展的默认配置） |
-| `tools/` | `rtk.exe`，`pi-rtk-optimizer` 需要的二进制，随包分发 |
+| `tools/` | 团队包附带的独立二进制目录（当前为空——曾放 `rtk.exe`，2026-10-04 因非跨平台移除） |
 | `templates/` | 项目级配置模板 `project-settings.json`、项目侧哨兵 `project-AGENTS.md` |
 | `scripts/` | `release.sh`（发版）、`simulate-member.sh`（从零装验证）、`test-extension.mjs`（基线扩展离线测）、`test-self-update.mjs`（自动更新链路离线测）、`test-audit-extension.mjs`（审计扩展离线测）、`test-audit-command.mjs`（`/audit` 命令离线测）、`test-handoff-command.mjs`（`/handoff` 命令离线测）、`test-model-alias.py`（别名归并测）、`pi_audit_report.py`（审计报表，被 `/audit` 调用） |
 | `docs/` | 怎么写各类资源 + `audit-log.md`（审计字段与口径）、`audit-report.md`（报表用法）。**说明文档一律放这里，别放 skills/** |
@@ -242,7 +244,7 @@ PI_CODING_AGENT_DIR="$SB" pi list     # 应看到清单里的包都带路径
 
 ## 扩展做了什么（成员不用管，但该知道）
 
-`team-baseline` 扩展在每次会话做八件事：
+`team-baseline` 扩展在每次会话做七件事：
 
 1. **把 `team/RULES.md` 注入系统提示** —— pi 原生不加载包内的 AGENTS.md，这是绕过办法
 2. **项目缺 `.mcp.json` 时从包里补一份** —— 绝不覆盖已有的；只在有 `.pi/` 的目录里动手
@@ -253,8 +255,8 @@ PI_CODING_AGENT_DIR="$SB" pi list     # 应看到清单里的包都带路径
    **一个例外**：档位的 `contextWindow` 正好等于某次改版前的旧模板值时会刷成现值
    （成员自己调过的、哪怕只差 1，都不动）—— 否则团队改模板永远推不到老成员身上（v1.13.4 加的）
 6. **把 `team/extensions/<扩展名>.json` 补到扩展自己的配置位置** —— 目标已存在就完全不动
-7. **缺 rtk 时从 `tools/` 补一份到 npm 全局 bin** —— 补完用 `where` 验一次
-8. **跟远端最新 tag 对齐**（放在最后，本会话仍用旧版）—— 落后就 fetch + reset --hard，
+   （扩展若不读默认落点，在 `EXT_CONFIG_TARGETS` 里登记覆盖路径，如 `pi-context-prune`）
+7. **跟远端最新 tag 对齐**（放在最后，本会话仍用旧版）—— 落后就 fetch + reset --hard，
    并把 settings 里的 ref 一起改写；有未提交改动则拒绝动手（细节见「成员如何更新基线」）
 
 所以改团队规范 = 改 `team/RULES.md` 然后发新版；改 MCP 基线 = 填 `team/mcp.template.json`；

@@ -735,9 +735,17 @@ function syncModelsConfig(): ModelsSync {
 /**
  * 扩展自己的配置文件：`team/extensions/<扩展名>.json` → `<agent dir>/extensions/<扩展名>/config.json`。
  *
- * 这是 pi-rtk-optimizer 这类「配置不在 settings.json 里、在自己的 config.json 里」的扩展。
+ * 这是 pi-context-prune 这类「配置不在 settings.json 里、在自己的文件里」的扩展。
  * 只看目标存不存在，**存在就完全不动** —— 成员调过的配置（比如关掉某个压缩项）不能被重置。
+ *
+ * ⚠️ 有的扩展不读默认落点，而是自己指定的路径（写错位置 = **静默不生效**，实测踩过）。
+ * 这类在 EXT_CONFIG_TARGETS 里登记覆盖路径 —— 必须从扩展源码里查到，不能照抄。
  */
+const EXT_CONFIG_TARGETS: Record<string, string> = {
+	// pi-context-prune 读 <agent dir>/context-prune/settings.json（源码 src/config.ts 的 SETTINGS_PATH）
+	"pi-context-prune": path.join("context-prune", "settings.json"),
+};
+
 function syncExtensionConfigs(): { written: string[]; failed: string[] } {
 	const written: string[] = [];
 	const failed: string[] = [];
@@ -751,7 +759,10 @@ function syncExtensionConfigs(): { written: string[]; failed: string[] } {
 		const m = entry.match(/^([^.].*)\.json$/);
 		if (!m) continue;
 		const name = m[1];
-		const target = path.join(getAgentDir(), "extensions", name, "config.json");
+		const override = EXT_CONFIG_TARGETS[name];
+		const target = override
+			? path.join(getAgentDir(), override)
+			: path.join(getAgentDir(), "extensions", name, "config.json");
 		if (fs.existsSync(target)) continue;
 		const content = readIfExists(path.join(extensionConfigsDir, entry));
 		if (content === undefined) continue;
@@ -764,59 +775,6 @@ function syncExtensionConfigs(): { written: string[]; failed: string[] } {
 		}
 	}
 	return { written, failed };
-}
-
-type RtkState = "ok" | "installed" | "not-in-path" | "no-bundle" | "error";
-
-const isWin = process.platform === "win32";
-
-/** 用 where/which 判断 rtk 在不在 PATH 里 —— 跟 pi-rtk-optimizer 自己的判定方式保持一致 */
-function rtkOnPath(): boolean {
-	try {
-		execFileSync(isWin ? "where" : "which", ["rtk"], {
-			stdio: ["ignore", "pipe", "ignore"],
-			timeout: 3000,
-		});
-		return true;
-	} catch {
-		return false;
-	}
-}
-
-/**
- * rtk 二进制（pi-rtk-optimizer 依赖，但 npm 装不到它）。
- * 团队成员机器上通常没有，所以包里带一份，缺了就从包里补到 ~/.local/bin。
- * 这是唯一一个"扩展往用户机器写可执行文件"的地方 —— 写的是团队自己的二进制。
- */
-function ensureRtk(): RtkState {
-	if (rtkOnPath()) return "ok"; // 已经有了
-	const binName = isWin ? "rtk.exe" : "rtk";
-	const bundled = path.join(packageRoot, "tools", binName);
-	if (!fs.existsSync(bundled)) return "no-bundle";
-
-	// 候选目录按"有多大概率已经在 PATH 里"排序，逐个试，写进去就用 where/which 验一次。
-	// 放 ~/.local/bin 是不够的：Windows 上那个目录默认不在 PATH，装了也找不到（实测过）。
-	const candidates = isWin
-		? [
-				// npm 全局 bin —— 用 npm 装过 pi 的人，这个目录必然在 PATH
-				path.join(os.homedir(), "AppData", "Roaming", "npm"),
-				path.join(os.homedir(), ".local", "bin"),
-			]
-		: [path.join(os.homedir(), ".local", "bin")];
-
-	for (const dir of candidates) {
-		try {
-			fs.mkdirSync(dir, { recursive: true });
-			const target = path.join(dir, binName);
-			fs.copyFileSync(bundled, target);
-			if (!isWin) fs.chmodSync(target, 0o755);
-			// 装完立刻验证：这一处能被 where/which 认到才算成功
-			if (rtkOnPath()) return "installed";
-		} catch {
-			// 换下一个候选目录
-		}
-	}
-	return "not-in-path";
 }
 
 // ───────────────────────── 自动更新的实现 ─────────────────────────
@@ -1096,27 +1054,6 @@ export default function teamBaseline(pi: ExtensionAPI) {
 		extConfigsWritten = [];
 	}
 
-	// pi-rtk-optimizer 需要的 rtk 二进制：缺了就从包里补一份
-	let rtkResult: RtkState = "ok";
-	try {
-		rtkResult = ensureRtk();
-		if (rtkResult === "installed") {
-			console.error(
-				"[team-baseline] 已把 rtk 装好（PATH 里能找到）—— **重启 pi** 后命令压缩就会生效",
-			);
-		} else if (rtkResult === "not-in-path") {
-			console.error(
-				`[team-baseline] rtk 已装好，但所在目录**不在 PATH 里** —— 请把 ${path.join(os.homedir(), ".local", "bin")} 加进 PATH，否则命令压缩不生效`,
-			);
-		} else if (rtkResult === "no-bundle") {
-			console.error(
-				`[team-baseline] 缺 rtk 且包里没有对应平台的二进制（当前 ${process.platform}）—— 请手动安装：https://github.com/rtk-ai/rtk`,
-			);
-		}
-	} catch {
-		rtkResult = "error";
-	}
-
 	// ★ 自动更新放在**最后**：这次会话用的还是旧版内容（pi 在扩展加载前就把资源列表收完了），
 	//   这里只把 clone 拉到最新 tag，下次启动才是新版。维护者只管 push tag，成员零动作。
 	let selfUpdateResult: SelfUpdateResult = { state: "off" };
@@ -1170,7 +1107,6 @@ ${rules.trim()}
 					`settingsSync=${settingsResult}\n` +
 					`modelsSync=${modelsResult}\n` +
 					`extConfigsSync=${extConfigsWritten.length ? extConfigsWritten.join(",") : "(无)"}\n` +
-					`rtkSync=${rtkResult}\n` +
 					`selfUpdate=${selfUpdateResult.state}${selfUpdateResult.tag ? ` (${selfUpdateResult.tag})` : ""}\n` +
 					`problems=${problems.length ? problems.join(" | ") : "(无)"}\n` +
 					`cwd=${projectDir}\n\n`;

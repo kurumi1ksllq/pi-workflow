@@ -144,9 +144,11 @@ fs.writeFileSync(
 	),
 	"utf-8",
 );
-const rtkCfgPath = path.join(AGENT, "extensions", "pi-rtk-optimizer", "config.json");
-fs.mkdirSync(path.dirname(rtkCfgPath), { recursive: true });
-fs.writeFileSync(rtkCfgPath, JSON.stringify({ enabled: false }, null, 2), "utf-8");
+// pi-context-prune 的配置**不在**默认落点 ~/.pi/agent/extensions/<名>/config.json，
+// 而在 <agent dir>/context-prune/settings.json —— 扩展里用 EXT_CONFIG_TARGETS 覆盖路径，这里一并验。
+const pruneCfgPath = path.join(AGENT, "context-prune", "settings.json");
+fs.mkdirSync(path.dirname(pruneCfgPath), { recursive: true });
+fs.writeFileSync(pruneCfgPath, JSON.stringify({ enabled: false }, null, 2), "utf-8");
 
 await load();
 const mine = readSettings();
@@ -169,15 +171,15 @@ check(
 check(mine.subagents.disableThinking === sharedSettings.subagents.disableThinking, "subagents.disableThinking 没补上（场景 5）");
 check(!Object.keys(mine).some((k) => k.startsWith("_")), "模板里的 `_` 说明键被写进了设置（场景 7）");
 check(
-	JSON.parse(fs.readFileSync(rtkCfgPath, "utf-8")).enabled === false,
+	JSON.parse(fs.readFileSync(pruneCfgPath, "utf-8")).enabled === false,
 	"覆盖了成员调过的扩展配置（场景 6：只补不覆盖）",
 );
 
 // 成员机器上还没有这个扩展的配置 → 从模板补一份，内容必须与模板逐字节一致
-fs.rmSync(path.dirname(rtkCfgPath), { recursive: true, force: true });
+fs.rmSync(path.dirname(pruneCfgPath), { recursive: true, force: true });
 await load();
 check(
-	fs.readFileSync(rtkCfgPath, "utf-8") === fs.readFileSync(path.join(extCfgDir, "pi-rtk-optimizer.json"), "utf-8"),
+	fs.readFileSync(pruneCfgPath, "utf-8") === fs.readFileSync(path.join(extCfgDir, "pi-context-prune.json"), "utf-8"),
 	"扩展配置没按模板补上（场景 6）",
 );
 

@@ -5,7 +5,7 @@
 ## 一、安装(全局,一次)
 
 ```bash
-pi install git:github.com/kurumi1ksllq/pi-workflow@v1.15.2
+pi install git:github.com/kurumi1ksllq/pi-workflow@v1.16.0
 ```
 
 **注意没有 `-l`** —— 全局安装,落到 `~/.pi/agent/settings.json`,之后在任何项目目录跑 pi 都带着团队基线,不绑定具体项目。
@@ -78,4 +78,4 @@ python scripts/pi_audit_report.py --dir <甲的logs> --label 甲 --dir <乙的lo
 
 ---
 
-**一句话版:** `pi install git:github.com/kurumi1ksllq/pi-workflow@v1.15.2` → 启动两次 → 完事。日常更新自动跟,不用管。有装不上的、报表是空的、要往清单里加东西,找维护者。
+**一句话版:** `pi install git:github.com/kurumi1ksllq/pi-workflow@v1.16.0` → 启动两次 → 完事。日常更新自动跟,不用管。有装不上的、报表是空的、要往清单里加东西,找维护者。

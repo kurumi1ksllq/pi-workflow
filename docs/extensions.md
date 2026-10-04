@@ -19,8 +19,7 @@
 | 第三方包清单 | 包里的设置文件不会被读 | 把 `team/packages.json` 里的包补进**全局** `~/.pi/agent/settings.json` |
 | 共享的全局设置 | 同上，包里的设置不会被读 | 把 `team/agent-settings.json` **只补缺**地并进全局设置 |
 | 团队模型配置 | 同上；且 `subagents` 路由写的档位别名要求成员本地有对应 provider + 档位 | 把 `team/models.template.json` 按 provider 并进全局 `models.json`（provider 内按 id 追加，见下节） |
-| 扩展自己的配置 | 各扩展只读自己固定位置的 `config.json` | 把 `team/extensions/<扩展名>.json` 补到那个位置（**存在就不动**） |
-| 包的外部依赖 | `pi install` 只装 npm 包本身，命令行不进 PATH | 缺 `rtk` 时从包内 `tools/` 补到 npm 全局 bin |
+| 扩展自己的配置 | 各扩展只读自己固定位置的配置文件 | 把 `team/extensions/<扩展名>.json` 补到那个位置（**存在就不动**）；扩展不读默认落点的，在 `EXT_CONFIG_TARGETS` 登记覆盖路径 |
 | 团队包自己的更新 | 启动只弹提示、**不自动应用**；钉了 tag 连提示都不弹 | 比对远端最新 `vX.Y.Z` tag，落后就 fetch + reset --hard，并改写 settings 里的 ref |
 
 最后一条（自动更新）的细节与闸门见 README「成员如何更新基线」和 CHANGELOG v1.9.0 ——
@@ -78,7 +77,7 @@ PI_BASELINE_DEBUG=1 pi            # 真机：跑完看 .pi/team-baseline.debug.t
 
 `PI_BASELINE_DEBUG=1` 跑完看 `.pi/team-baseline.debug.txt`，里面是**拼接之后的完整系统提示**：
 开头是 pi 的原生提示，往下翻能看到「## 团队基线规范」那一段 —— 那就是注进去的。
-文件开头还有各条同步链路的本次启动结果（`pkgSync` / `settingsSync` / `extConfigsSync` / `rtkSync`）。
+文件开头还有各条同步链路的本次启动结果（`pkgSync` / `settingsSync` / `extConfigsSync`）。
 
 ## 团队要一起用的第三方包：team/packages.json
 
@@ -117,7 +116,7 @@ git 源同样要钉：是 tag 就写 `@v1.2.3`，只有主干可跟就写完整 
 
 - **别在这里放私人工具**（比如你自己为了省 token 装的那些）。团队清单是"全团队都得用"的东西，
   放进去等于替所有人做决定
-- 原生不支持的工具要一起装，得先解决"成员怎么装"—— 见下面 rtk 那节
+- 原生不支持的工具要一起装，得先解决"成员怎么装"—— 见下面「内置二进制」那节（现已弃用，留作参考）
 - 清单里的包**一律钉版本**；成员手里是旧的不带版本条目时，扩展会替换掉它（这条改动是 v1.6.4 加的）
 
 ## 共享的全局设置：team/agent-settings.json
@@ -188,22 +187,32 @@ git 源同样要钉：是 tag 就写 `@v1.2.3`，只有主干可跟就写完整 
 
 ## 扩展自己的配置：team/extensions/
 
-有些扩展的配置不在 `settings.json` 里，而在自己的文件里 —— 比如 `pi-rtk-optimizer` 读的是
-`<agent dir>/extensions/pi-rtk-optimizer/config.json`。约定：
+有些扩展的配置不在 `settings.json` 里，而在自己的文件里。默认约定：
 
 ```
 team/extensions/<扩展名>.json   →   <agent dir>/extensions/<扩展名>/config.json
 ```
 
-（`pi-rtk-optimizer` 的配置位置来自它源码里的 `CONFIG_DIR = join(getAgentDir(), "extensions", EXTENSION_NAME)`；
-换别的扩展前先确认它到底读哪个路径，别照抄这个约定。）
+**但扩展不读这个默认落点是常态** —— 每个扩展的配置位置得从它源码里查，不能照抄。
+这类在 `team-baseline.ts` 的 `EXT_CONFIG_TARGETS` 里登记覆盖路径。当前已登记的：
+
+| 扩展 | 实际配置文件 |
+| --- | --- |
+| `pi-context-prune` | `<agent dir>/context-prune/settings.json`（源码 `src/config.ts` 的 `SETTINGS_PATH`） |
+
+（**写错路径 = 静默不生效**，实测踩过 —— 配置补对了地方，扩展却读另一个文件。改动前一定回源码确认。）
 
 规则同样是**只补不覆盖**：目标文件已存在就完全不动 —— 成员调过的配置（比如关掉某个压缩项）
 不能被重置。删掉自己那份配置的人，下次启动会拿到团队默认值。
 
-## 内置二进制：tools/ + 扩展补装（rtk 的例子）
+## 内置二进制：tools/ + 扩展补装（已弃用，留作参考）
 
-`pi-rtk-optimizer` 需要独立的 `rtk` 二进制，而**它不在 pi 的包体系里**：
+> **2026-10-04 起本仓不再有这种包。** 这段讲的是 `pi-rtk-optimizer` 的老做法，
+> 因 `rtk.exe` 是 Windows 专有二进制、非跨平台而整体移除（团队要上 Linux）。
+> **教训：团队清单里的包优先选纯 npm / 跨平台的**，带平台专有二进制的先想清楚换平台还能不能用。
+> 万一以后确实要加，照着下面这个模式做。
+
+`pi-rtk-optimizer` 当年需要独立的 `rtk` 二进制，而**它不在 pi 的包体系里**：
 官方 `@rtk-ai/rtk` 没发 npm 包，而且实测 `pi install npm:xxx` 装的包，
 它带的命令行**不会**进 PATH。所以这一步只能是扩展做：
 
@@ -216,10 +225,6 @@ team/extensions/<扩展名>.json   →   <agent dir>/extensions/<扩展名>/conf
 而 Windows 上 `~/.local/bin` **默认不在 PATH** —— 一开始装那儿，装了等于白装（实测踩过）。
 
 新加带外部依赖的包就照这个模式：二进制进 `tools/`，扩展里加一段补装逻辑 + `where` 验证。
-
-> npm 装 `pi-rtk-optimizer` 时会打一条 `1 package had install scripts blocked` 警告。
-> 无害 —— 它的 postinstall 只在 `/.pi/agent/extensions/` 路径下才干活，装到
-> `agent/npm/node_modules` 时本来就会自己退出。别为这条警告改 npm 策略。
 
 ## 装法：团队一律全局
 
@@ -267,7 +272,7 @@ team/extensions/<扩展名>.json   →   <agent dir>/extensions/<扩展名>/conf
 结果 print 模式下静默不生效 —— 这个坑踩过一次，别改回去。
 `session_start` 只用来做交互模式下的额外提示。
 
-包清单、共享设置、扩展配置、rtk 的同步都是**在扩展加载时**（顶层代码）跑的，
+包清单、共享设置、扩展配置的同步都是**在扩展加载时**（顶层代码）跑的，
 比 `before_agent_start` 更早 —— 包清单必须这么早，晚了就赶不上 pi 检查缺哪些包。
 设置类同步同样放这儿，代价是**本次启动不生效、下一次才读到**，所以提示语里都写了「重启 pi 生效」。
 
@@ -289,7 +294,7 @@ team/extensions/<扩展名>.json   →   <agent dir>/extensions/<扩展名>/conf
 - 扩展跑在成员机器上，别在这里放网络请求、密钥读取、文件删除
 - 写的 `.mcp.json` 只在不存在时补，**绝不覆盖**成员已有的配置 —— 这条不能改
 - 共享设置只补缺、扩展配置只补不覆盖 —— 这两条同样是"只补不覆盖"家族，别改成覆盖
-- 往用户机器写可执行文件只有一处（补 rtk），写的必须是包里自带的那份，别改成去网上下
+- 往用户机器写可执行文件曾有一处（补 rtk），已随 rtk 移除；以后若再加，写的必须是包里自带的那份，别改成去网上下
 
 ## team/ 目录
 
