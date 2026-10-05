@@ -9,7 +9,7 @@
 2. 全局装基线：
 
    ```bash
-   pi install git:github.com/kurumi1ksllq/pi-workflow@v1.16.0
+   pi install git:github.com/kurumi1ksllq/pi-workflow@v1.17.0
    ```
 
    **注意没有 `-l`** —— 这是全局安装，落到 `~/.pi/agent/settings.json`，
@@ -27,7 +27,7 @@
 **推荐写法，`git:` 前缀不能省：**
 
 ```
-git:github.com/<org>/pi-workflow@v1.16.0
+git:github.com/<org>/pi-workflow@v1.17.0
 ```
 
 省掉前缀 pi 会当本地目录，报 `Path does not exist: ...\github.com\org\pi-workflow` ——
@@ -136,7 +136,7 @@ node scripts/test-self-update.mjs
 一行命令，在隔离目录里模拟一个**全新成员**：
 
 ```bash
-bash scripts/simulate-member.sh v1.16.0
+bash scripts/simulate-member.sh v1.17.0
 ```
 
 它做的事：造一个独立的 agent 配置目录（不碰你本机的 `~/.pi/agent`），然后走
@@ -159,7 +159,7 @@ bash scripts/simulate-member.sh v1.16.0
 
 ```bash
 SB='C:\Users\<你>\pi-check-agent'   # 隔离的 agent 目录，Windows 路径写法
-PI_CODING_AGENT_DIR="$SB" pi install git:github.com/kurumi1ksllq/pi-workflow@v1.16.0
+PI_CODING_AGENT_DIR="$SB" pi install git:github.com/kurumi1ksllq/pi-workflow@v1.17.0
 # 隔离目录不带凭据，启动前把 auth.json 拷进去（models.json 别拷：那正是要验的同步目标）
 PI_CODING_AGENT_DIR="$SB" pi -p ok    # 第一次：扩展写清单 + 补共享设置 + 补模型配置
 PI_CODING_AGENT_DIR="$SB" pi list     # 应看到清单里的包都带路径
@@ -232,7 +232,7 @@ PI_CODING_AGENT_DIR="$SB" pi list     # 应看到清单里的包都带路径
 | 路径 | 内容 |
 | --- | --- |
 | `skills/` | 按需加载的能力包。`00-core/` 全员共享，其余按角色分目录 |
-| `prompts/` | 斜杠命令，`review.md` → `/review` |
+| `prompts/` | 斜杠命令，`review.md` → `/review`、`init.md` → `/init` |
 | `extensions/` | `team-baseline.ts`（引导扩展：注入规范、补 MCP 基线、同步包清单、补共享设置、补模型配置、补扩展配置、自动跟最新 tag）+ `audit-log.ts`（审计日志，见下节）+ `context-thrift.ts`（剥离重放的历史思考，见下节）+ `handoff.ts`（会话交接 `/handoff`，见下节） |
 | `team/` | 扩展的数据源：`RULES.md`（规范）+ `mcp.template.json`（MCP 基线）+ `packages.json`（第三方包清单）+ `agent-settings.json`（共享设置补丁）+ `models.template.json`（网关与档位别名，不含 key）+ `extensions/`（各扩展的默认配置） |
 | `tools/` | 团队包附带的独立二进制目录（当前为空——曾放 `rtk.exe`，2026-10-04 因非跨平台移除） |

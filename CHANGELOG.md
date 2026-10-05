@@ -1,5 +1,21 @@
 # 变更记录
 
+## v1.17.0
+- **新增 `/init` 提示词（`prompts/init.md`）—— 通读项目、产出 `AGENTS.md`。**
+  **语义是「重新理解 + 合并升版」，不是「初始化」。** 就算仓库里已有 `AGENTS.md`，
+  也要重新把项目全面摸一遍，把这次的理解与旧文档合并：仍然有效的保留、过期的修正、缺的补上，
+  产出一版新的 —— **任何情况下都不从零覆盖、也不新建第二份**（三姐 2026-10-06 明确）。
+  正文固定了团队「接手项目」的标准问法：通读技术栈/目录结构/构建测试命令/代码约定/禁区 →
+  产出仓库根 `AGENTS.md`（只写实际验证过的、拿不准的进「待确认」）。
+  做成 **prompt 而非扩展**：团队规矩是「能用 skill/prompt 表达的就不写扩展」
+  （扩展跑任意代码、要 review）—— `prompts/review.md` → `/review` 同构。
+  意义：`AGENTS.md` 是全队共享的上下文（pi 原生加载 cwd 祖先链），谁先接项目谁跑一次、提交进仓库，
+  后面所有 agent 理解一致，不必各自重摸。
+- 命名取舍：不用 `/onboard` —— 会与团队包已有的 `ONBOARDING.md`（成员装 pi 上手）撞词，
+  且 `onboard` 只表达「熟悉」、不表达「产出/更新文档」；`/init` 与 Claude Code 生态一致，成员有肌肉记忆。
+- 同步文档：README 目录表、`docs/prompts.md`（举例）、`ONBOARDING.md`（`[Prompts]` 列表 + 「你会自动获得什么」表）、
+  `ANNOUNCEMENT.md`（新增第四节）。
+
 ## v1.16.0
 - **移除 `pi-rtk-optimizer`，换上 `pi-context-prune@2.1.0`。** rtk 依赖独立的 `rtk` 二进制
   （包内 `tools/rtk.exe`，PE/Windows 专有），团队要把 pi 搬到 Linux（云端 Hermes）时直接不可用 ——

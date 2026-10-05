@@ -5,7 +5,7 @@
 ## 一、安装(全局,一次)
 
 ```bash
-pi install git:github.com/kurumi1ksllq/pi-workflow@v1.16.0
+pi install git:github.com/kurumi1ksllq/pi-workflow@v1.17.0
 ```
 
 **注意没有 `-l`** —— 全局安装,落到 `~/.pi/agent/settings.json`,之后在任何项目目录跑 pi 都带着团队基线,不绑定具体项目。
@@ -30,7 +30,7 @@ export NEWAPI_API_KEY=sk-...
 
 ### 装完自动拿到什么
 
-团队规范、4 个 skill、`/review`,外加两个常用命令(见下)。日常更新**不用管** —— 每次启动自动比对远端最新版,落后会提示「已自动更新 vX → vY,重启生效」。
+团队规范、4 个 skill、`/review`,外加三个常用命令(见下)。日常更新**不用管** —— 每次启动自动比对远端最新版,落后会提示「已自动更新 vX → vY,重启生效」。
 
 装完想确认状态:在 pi 里敲 `/team-baseline`。
 
@@ -78,4 +78,18 @@ python scripts/pi_audit_report.py --dir <甲的logs> --label 甲 --dir <乙的lo
 
 ---
 
-**一句话版:** `pi install git:github.com/kurumi1ksllq/pi-workflow@v1.16.0` → 启动两次 → 完事。日常更新自动跟,不用管。有装不上的、报表是空的、要往清单里加东西,找维护者。
+## 四、`/init` —— 通读项目、产出 `AGENTS.md`
+
+接手一个项目时，别上来就改代码。在项目根目录敲 `/init`：让 AI 先把项目全面摸一遍（技术栈、目录结构、构建/测试/lint 的确切命令、代码约定、不能碰的东西），再产出一版 `AGENTS.md` 落到仓库根。
+
+```
+/init          # 通读项目 → 产出/更新 AGENTS.md（理解阶段不动代码）
+```
+
+- **这不是「初始化」**：仓库里已经有 `AGENTS.md` 时，也是重新通读一遍，把这次的理解与旧文档**合并升级** —— 仍然有效的保留、过期的修正、缺的补上，**不从零覆盖、也不新建第二份**
+- 只写**实际读到、验证过**的；拿不准的列进「待确认」，不编命令
+- `AGENTS.md` 会被 pi 自动加载（全局 + cwd 祖先链），之后任何 agent 进这个项目都带同一份理解 —— **谁先接就谁跑一次，提交进仓库**
+
+---
+
+**一句话版:** `pi install git:github.com/kurumi1ksllq/pi-workflow@v1.17.0` → 启动两次 → 完事。日常更新自动跟,不用管。有装不上的、报表是空的、要往清单里加东西,找维护者。
