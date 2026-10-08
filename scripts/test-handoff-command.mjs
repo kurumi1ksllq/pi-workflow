@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const extPath = "E:/hermes/team-pi/extensions/handoff.ts";
+const extPath = "E:/Project-hub/team-pi/extensions/handoff.ts";
 
 let pass = 0, fail = 0;
 const check = (label, ok, extra = "") => {

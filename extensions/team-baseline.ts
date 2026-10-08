@@ -53,7 +53,7 @@ const pkgJsonFile = path.join(packageRoot, "package.json");
 //     就把 clone 打回旧版。
 //
 // 三道闸限制它只敢动「pi 自己 clone 的团队包目录」：clone 必须位于 <agent dir>/git/ 下、
-// settings 里要有团队包的源条目、origin 指向本仓库。开发副本（比如维护者的 E:\hermes\team-pi）
+// settings 里要有团队包的源条目、origin 指向本仓库。开发副本（比如维护者的 E:\Project-hub\team-pi）
 // 因此永远不会被 reset --hard（那会丢掉未提交的活儿）。
 const UPDATE_TTL_MS = (() => {
 	const hours = Number(process.env.PI_BASELINE_UPDATE_TTL_HOURS);

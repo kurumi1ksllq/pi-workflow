@@ -5,7 +5,7 @@ import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const extPath = "E:/hermes/team-pi/extensions/team-baseline.ts";
+const extPath = "E:/Project-hub/team-pi/extensions/team-baseline.ts";
 
 // 先记下真实家目录（改 env 之前），末尾用来断言「没污染用户目录」。
 const homedirReal = homedir();
@@ -53,7 +53,7 @@ check("audit 有 handler", typeof commands.audit?.handler === "function");
 // 真的调一次 handler —— 这才是「命令能不能跑」的证据
 const notices = [];
 const ctx = {
-  cwd: "E:/hermes/team-pi",
+  cwd: "E:/Project-hub/team-pi",
   ui: {
     notify: (msg, level) => { notices.push({ msg, level }); },
   },
@@ -89,7 +89,7 @@ console.log("\n参数透传验证");
 async function runAudit(args) {
   const ns = [];
   await commands.audit.handler(args, {
-    cwd: "E:/hermes/team-pi",
+    cwd: "E:/Project-hub/team-pi",
     ui: { notify: (msg, level) => ns.push({ msg, level }) },
   });
   const f = ns[ns.length - 1];

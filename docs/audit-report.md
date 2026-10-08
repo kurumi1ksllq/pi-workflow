@@ -12,7 +12,7 @@
 ## 1. 用法
 
 ```bash
-python E:/hermes/team-pi/scripts/pi_audit_report.py                        # 默认:今天的日志
+python E:/Project-hub/team-pi/scripts/pi_audit_report.py                        # 默认:今天的日志
 python ... --all-days                                                       # 不限日期,算目录里全部
 python ... --since 2026-09-18 --until 2026-09-21                            # 日期区间(含两端,本地时区)
 python ... --session 01a0c209                                               # 只看某个会话(id 前缀)
