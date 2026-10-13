@@ -1,5 +1,24 @@
 # 变更记录
 
+## v1.19.0
+- **升级 `pi-subagents` 0.75.0 → 0.78.0，修「pi 1.2.0 上后台异步子代理全挂」。**
+  症状：`async: true` / `workflow` 派单一律报
+  `Background children require the host npm package ... does not provide @earendil-works/chord`。
+  根因是上游版本判定 bug：`@earendil-works/chord` 只在 pi 0.85 ~ 1.1.x 随宿主发布，
+  **pi 1.2.0 起不再带它**；而 0.75.0 的判定是「pi minor ≥ 85 就必须有 chord」→ 1.2.0（minor=2）
+  被误判成「该有」，找不到就拒绝启动后台通道。前台派单（`async: false`）不受影响，所以此前未暴露。
+  上游 0.78.0 修法：**只有宿主 manifest 明确声明 chord 时才要求它**（nicobailon/pi-subagents#2854 / #2855）。
+  注：0.77.0 引入该回归（它才是首个在 pi 1.2.0 上挂掉的版本），0.78.0 一并修好 —— 所以中间版本不要单独停。
+- **顺带收益（0.77.0 起）**：`subagent` 工具的 schema + 描述从每请求约 18,700 字符降到约 3,300，
+  `bg_wait` 从约 4,500 降到约 1,100，内置 role prompt 缩短约 20% —— 每轮固定 token 税明显下降。
+  另有「升级 pi-subagents 不再让已恢复会话丢 prompt cache」「后台子代理可按 `launcher:` 进沙箱」等改动。
+- **破坏性变更须知（0.77.0）**：`subagent` 工具调用形状变了 —— 顶层只保留
+  `agent/task/workflow/args/async/model/cwd/worktree/output/action/id/message`，
+  其余字段收进 `options` 对象。老调用的管理字段与 `runId`/`maxRuntimeMs`/`isolation` 别名仍可用，
+  但**各角色的 prompt / skill 若手写顶层字段，应改用 `options`**。已核对本机 19 个自定义 agent 与团队 prompts/skills：均无手写 `subagent(...)` 顶层管理字段，无需改动。
+- 升级方式：改 `team/packages.json` 的版本号 → 发版；成员下次启动 pi 会自动装齐
+  （`team-baseline` 扩展按清单同步，钉了版本的条目会覆盖成员本地写法）。
+
 ## v1.18.0
 - **新增「项目文档」团队标准（`team/RULES.md`），并让 `/init` 按这套标准补齐/升版整套文档。**
   标准固定了文档的分类、位置与「什么时候写」：必备三类 `README.md` / `CHANGELOG.md` / `AGENTS.md`，

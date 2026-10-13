@@ -6,7 +6,7 @@
     "npm:@juicesharp/rpiv-todo@2.12.0",
     "npm:@ocodista/pi-token-bloat@0.1.6",
     "npm:pi-lens@4.2.1",
-    "npm:pi-subagents@0.75.0",
+    "npm:pi-subagents@0.78.0",
     "git:github.com/DietrichGebert/ponytail@v4.10.0",
     "npm:pi-context-prune@2.1.0"
   ]
