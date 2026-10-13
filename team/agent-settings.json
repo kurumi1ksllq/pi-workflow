@@ -13,13 +13,13 @@
     "disableThinking": true,
     "agentOverrides": {
       "reviewer": {
-        "model": "tier-power"
+        "model": "tier-std"
       },
       "researcher": {
-        "model": "tier-power"
+        "model": "tier-std"
       },
       "oracle": {
-        "model": "tier-max"
+        "model": "tier-std"
       }
     }
   }

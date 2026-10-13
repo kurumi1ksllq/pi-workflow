@@ -1,5 +1,21 @@
 # 变更记录
 
+## v1.20.0
+- **`tier-power` / `tier-max` 渠道暂时停用 → 团队基线的子代理路由降到 `tier-std`。**
+  网关侧实测:`tier-power` / `tier-max` 均返回 `503 model_not_found`(no available channel),
+  五个渠道(`abilities` 表)全部只映射 `tier-std`。此前 `reviewer` / `researcher` 指向 `tier-power`、
+  `oracle` 指向 `tier-max`,派它们必 503。
+  本版把 `team/agent-settings.json` 的这三个 override 改为 `tier-std`。
+- **注意(只补缺,推不到老成员)**:扩展是 `mergeMissing`「只补缺」语义,成员 settings 里
+  **已经写进去的** `tier-power` / `tier-max` 推不下去。**老成员需手动改**
+  `~/.pi/agent/settings.json` 的 `subagents.agentOverrides` 三个 model 为 `tier-std`
+  (本机已于同日先行改好并实测 `reviewer` 派单成功)。
+- **档位定义保留**:`team/models.template.json` 里的 `tier-power` / `tier-max` 定义**不删** ——
+  这是**暂时停用**,渠道恢复后改回 override 即可,成员无需重新拿定义。
+  故本版**未引入自动迁移**:迁移会永久改写成员配置,与「暂时」冲突(试过,被单测抓到不幂等 + 不可逆,已回退)。
+- **恢复步骤**(渠道回来时):把 `team/agent-settings.json` 三个 override 改回
+  `tier-power` / `tier-power` / `tier-max`,发版;老成员同样需手动改回。
+
 ## v1.19.0
 - **升级 `pi-subagents` 0.75.0 → 0.78.0，修「pi 1.2.0 上后台异步子代理全挂」。**
   症状：`async: true` / `workflow` 派单一律报
